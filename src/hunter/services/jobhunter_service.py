@@ -1886,12 +1886,15 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 # Show next run time
                 next_run = self._calculate_next_run()
                 if next_run:
+                    # Convert to America/New_York for display
+                    ny_tz = pytz.timezone('America/New_York')
+                    next_run_ny = next_run.astimezone(ny_tz)
                     now = datetime.now(pytz.UTC)
                     time_until = next_run - now
                     hours = int(time_until.total_seconds() // 3600)
                     minutes = int((time_until.total_seconds() % 3600) // 60)
 
-                    response += f"\n🕐 **Next Run:** {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                    response += f"\n🕐 **Next Run:** {next_run_ny.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
                     response += f"⏱️  **Time Until:** {hours}h {minutes}m"
 
             self._send_response(sender, response, correlation_id=correlation_id)
