@@ -1516,10 +1516,9 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             if args and len(args) == 1:
                 try:
                     job_id = int(args[0])
-                    # If it's a valid integer and >= 100, treat as job ID
-                    if job_id >= 100:
-                        self._show_job_details(sender, job_id, correlation_id)
-                        return
+                    # Try to show details for this job_id
+                    self._show_job_details(sender, job_id, correlation_id)
+                    return
                 except ValueError:
                     pass  # Not an integer, continue with list view
 
