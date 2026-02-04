@@ -500,6 +500,12 @@ class JobHunterService(BaseService):
                 self._handle_deep_match(sender, args, correlation_id)
             elif command == "run-now":
                 self._handle_run_now(sender, correlation_id)
+            elif command == "add-schedule":
+                self._handle_add_schedule(sender, args, correlation_id)
+            elif command == "list-schedules":
+                self._handle_list_schedules(sender, correlation_id)
+            elif command == "remove-schedule":
+                self._handle_remove_schedule(sender, args, correlation_id)
             else:
                 self._send_error_response(
                     sender,
@@ -1796,6 +1802,148 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to run workflow: {str(e)}", correlation_id=correlation_id)
+
+    # ============================================================================
+    # Schedule Management (Phase 7)
+    # ============================================================================
+
+    def _handle_add_schedule(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle add-schedule command - add a scheduled run time.
+
+        Usage:
+          add-schedule <time> [timezone]
+          add-schedule "09:00"
+          add-schedule "13:00" "America/Chicago"
+        """
+        try:
+            if not args or len(args) < 1:
+                self._send_error_response(
+                    sender,
+                    "Usage: add-schedule <time> [timezone]\nExample: add-schedule \"09:00\" \"America/New_York\"",
+                    correlation_id=correlation_id
+                )
+                return
+
+            run_time = args[0]
+            timezone = args[1] if len(args) > 1 else "America/New_York"
+
+            # Validate time format (HH:MM)
+            import re
+            if not re.match(r'^\d{1,2}:\d{2}$', run_time):
+                self._send_error_response(
+                    sender,
+                    f"Invalid time format: {run_time}. Use HH:MM format (e.g., 09:00, 13:30)",
+                    correlation_id=correlation_id
+                )
+                return
+
+            # Add to database
+            schedule_id = self.db_manager.add_run_time(run_time, timezone)
+
+            response = f"✅ **Schedule Added**\n\n"
+            response += f"**Time:** {run_time}\n"
+            response += f"**Timezone:** {timezone}\n"
+            response += f"**Schedule ID:** {schedule_id}\n\n"
+            response += f"Use `list-schedules` to see all scheduled times."
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error adding schedule: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to add schedule: {str(e)}", correlation_id=correlation_id)
+
+    def _handle_list_schedules(self, sender: str, correlation_id: str = None):
+        """
+        Handle list-schedules command - list all scheduled run times.
+
+        Usage:
+          list-schedules
+        """
+        try:
+            schedules = self.db_manager.get_active_run_times()
+
+            if not schedules:
+                response = "📅 **No Scheduled Run Times**\n\n"
+                response += "Use `add-schedule` to set up automated daily runs.\n"
+                response += "Example: `add-schedule \"09:00\" \"America/New_York\"`"
+            else:
+                # Calculate next run
+                from datetime import datetime
+                import pytz
+
+                response = f"📅 **Scheduled Run Times** ({len(schedules)} active)\n\n"
+
+                for schedule in schedules:
+                    response += f"**ID {schedule['id']}:** {schedule['run_time']} {schedule['timezone']}\n"
+
+                # Show next run time
+                next_run = self._calculate_next_run()
+                if next_run:
+                    now = datetime.now(pytz.UTC)
+                    time_until = next_run - now
+                    hours = int(time_until.total_seconds() // 3600)
+                    minutes = int((time_until.total_seconds() % 3600) // 60)
+
+                    response += f"\n🕐 **Next Run:** {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
+                    response += f"⏱️  **Time Until:** {hours}h {minutes}m"
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error listing schedules: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to list schedules: {str(e)}", correlation_id=correlation_id)
+
+    def _handle_remove_schedule(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle remove-schedule command - remove a scheduled run time.
+
+        Usage:
+          remove-schedule <id>
+          remove-schedule 1
+        """
+        try:
+            if not args or len(args) < 1:
+                self._send_error_response(
+                    sender,
+                    "Usage: remove-schedule <id>\nExample: remove-schedule 1\nUse `list-schedules` to see IDs.",
+                    correlation_id=correlation_id
+                )
+                return
+
+            try:
+                schedule_id = int(args[0])
+            except ValueError:
+                self._send_error_response(
+                    sender,
+                    f"Invalid schedule ID: {args[0]}. Must be a number.",
+                    correlation_id=correlation_id
+                )
+                return
+
+            # Remove from database
+            success = self.db_manager.remove_run_time(schedule_id)
+
+            if success:
+                response = f"✅ **Schedule Removed**\n\n"
+                response += f"Removed schedule ID {schedule_id}.\n"
+                response += f"Use `list-schedules` to see remaining times."
+            else:
+                response = f"⚠️  **Schedule Not Found**\n\n"
+                response += f"No schedule with ID {schedule_id}.\n"
+                response += f"Use `list-schedules` to see valid IDs."
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error removing schedule: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to remove schedule: {str(e)}", correlation_id=correlation_id)
 
     # ============================================================================
     # Web Scraping (Phase 4)
