@@ -506,6 +506,10 @@ class JobHunterService(BaseService):
                 self._handle_list_schedules(sender, correlation_id)
             elif command == "remove-schedule":
                 self._handle_remove_schedule(sender, args, correlation_id)
+            elif command == "list-new-jobs":
+                self._handle_list_new_jobs(sender, correlation_id)
+            elif command == "list-stale-jobs":
+                self._handle_list_stale_jobs(sender, args, correlation_id)
             else:
                 self._send_error_response(
                     sender,
@@ -1946,6 +1950,128 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self._send_error_response(sender, f"Failed to remove schedule: {str(e)}", correlation_id=correlation_id)
 
     # ============================================================================
+    # Freshness Management (Phase 8)
+    # ============================================================================
+
+    def _handle_list_new_jobs(self, sender: str, correlation_id: str = None):
+        """
+        Handle list-new-jobs command - show only brand new jobs from latest scrape.
+
+        Usage:
+          list-new-jobs
+        """
+        try:
+            # Get all jobs with is_new=1
+            with self.db_manager._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT j.*, c.name as company_name
+                    FROM job_postings j
+                    JOIN companies c ON j.company_id = c.id
+                    WHERE j.is_new = 1 AND j.is_active = 1
+                    ORDER BY j.scraped_date DESC
+                    LIMIT 50
+                """)
+                jobs = [dict(row) for row in cursor.fetchall()]
+
+            if not jobs:
+                response = "🆕 **No New Jobs**\n\n"
+                response += "No brand new jobs found in the latest scrape.\n"
+                response += "Run `run-now` to scrape for new postings."
+            else:
+                response = f"🆕 **New Jobs** ({len(jobs)} found)\n\n"
+                response += "These jobs were just discovered in the latest scrape!\n\n"
+
+                # Score and sort by match quality
+                scored_jobs = []
+                for job in jobs:
+                    score = self._filter_and_score_job(job)
+                    if score > 0:
+                        scored_jobs.append({'job': job, 'score': score})
+
+                scored_jobs.sort(key=lambda x: x['score'], reverse=True)
+
+                if scored_jobs:
+                    response += "**Top Matches:**\n\n"
+                    for item in scored_jobs[:10]:
+                        job = item['job']
+                        score = item['score']
+                        response += f"🔥 **{score} pts** - {job['title']}\n"
+                        response += f"   🏢 {job['company_name']}\n"
+                        response += f"   📍 {job.get('location', 'No location')}\n"
+                        response += f"   🔗 Job ID: {job['id']}\n\n"
+
+                    response += f"\nℹ️ Use `score-jobs <id>` to see full details."
+                else:
+                    response += "⚠️ None of the new jobs match your criteria."
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error listing new jobs: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to list new jobs: {str(e)}", correlation_id=correlation_id)
+
+    def _handle_list_stale_jobs(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle list-stale-jobs command - show jobs older than N days.
+
+        Usage:
+          list-stale-jobs [days]
+          list-stale-jobs 14
+        """
+        try:
+            # Get threshold (default 14 days)
+            threshold_days = int(args[0]) if args and len(args) > 0 else 14
+
+            # Calculate date threshold
+            from datetime import datetime, timedelta
+            threshold_date = (datetime.now() - timedelta(days=threshold_days)).isoformat()
+
+            # Get stale jobs
+            with self.db_manager._get_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT j.*, c.name as company_name
+                    FROM job_postings j
+                    JOIN companies c ON j.company_id = c.id
+                    WHERE j.first_seen_date < ? AND j.is_active = 1
+                    ORDER BY j.first_seen_date ASC
+                    LIMIT 50
+                """, (threshold_date,))
+                jobs = [dict(row) for row in cursor.fetchall()]
+
+            if not jobs:
+                response = f"📅 **No Stale Jobs**\n\n"
+                response += f"No jobs older than {threshold_days} days found."
+            else:
+                response = f"📅 **Stale Jobs** ({len(jobs)} found)\n\n"
+                response += f"Jobs first seen more than {threshold_days} days ago:\n\n"
+
+                for job in jobs[:20]:
+                    # Calculate age
+                    first_seen = datetime.fromisoformat(job['first_seen_date'].replace('Z', '+00:00'))
+                    age_days = (datetime.now(first_seen.tzinfo) if first_seen.tzinfo else datetime.now() - first_seen).days
+
+                    response += f"⏰ **{age_days} days old** - {job['title']}\n"
+                    response += f"   🏢 {job['company_name']}\n"
+                    response += f"   👁️ Seen {job['times_seen']} times\n"
+                    response += f"   🔗 Job ID: {job['id']}\n\n"
+
+                if len(jobs) > 20:
+                    response += f"\n... and {len(jobs) - 20} more\n"
+
+                response += f"\n💡 **Tip:** These jobs may be filled but not removed from the website.\n"
+                response += f"Consider focusing on newer postings for better response rates."
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error listing stale jobs: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to list stale jobs: {str(e)}", correlation_id=correlation_id)
+
+    # ============================================================================
     # Web Scraping (Phase 4)
     # ============================================================================
 
@@ -2474,9 +2600,65 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                             group_score += tier_weight
                             break
 
-        # Calculate total score (no cap - jobs can score higher if they match more criteria)
-        total_score = individual_score + group_score
+        # Calculate base score (no cap - jobs can score higher if they match more criteria)
+        base_score = individual_score + group_score
+
+        # Apply freshness bonus/penalty (Phase 8)
+        freshness_adjustment = self._calculate_freshness_adjustment(job)
+        total_score = base_score + freshness_adjustment
+
         return int(total_score)
+
+    def _calculate_freshness_adjustment(self, job: Dict[str, Any]) -> int:
+        """
+        Calculate freshness bonus or penalty for a job (Phase 8).
+
+        Bonus for fresh jobs:
+        - Brand new (is_new=True): +15 points
+        - 1-3 days old: +10 points
+        - 4-7 days old: +5 points
+
+        Penalty for stale jobs:
+        - 14-30 days old: -5 points
+        - >30 days old: -10 points
+
+        Args:
+            job: Job dictionary with freshness fields
+
+        Returns:
+            Adjustment to score (positive for fresh, negative for stale)
+        """
+        # Check if this is a brand new job
+        if job.get('is_new', 0):
+            return 15  # Maximum bonus for brand new postings
+
+        # Calculate age in days
+        from datetime import datetime
+        first_seen_str = job.get('first_seen_date')
+        if not first_seen_str:
+            return 0  # No freshness data, no adjustment
+
+        try:
+            first_seen = datetime.fromisoformat(first_seen_str.replace('Z', '+00:00'))
+            now = datetime.now(first_seen.tzinfo) if first_seen.tzinfo else datetime.now()
+            age_days = (now - first_seen).days
+
+            # Bonus for fresh jobs
+            if age_days <= 3:
+                return 10
+            elif age_days <= 7:
+                return 5
+            # No adjustment for normal age (8-13 days)
+            elif age_days <= 13:
+                return 0
+            # Penalty for stale jobs
+            elif age_days <= 30:
+                return -5
+            else:
+                return -10  # Heavy penalty for very old postings (likely filled)
+
+        except (ValueError, AttributeError):
+            return 0  # Parse error, no adjustment
 
     def _extract_salary(self, text: str) -> tuple:
         """
