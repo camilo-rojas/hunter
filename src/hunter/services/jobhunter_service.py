@@ -3032,8 +3032,9 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 if self.verbose_logging:
                     self.logger.info(f"jobhunter-service:    ✅ Successfully deep scraped {success_count}/{deep_scrape_limit} jobs")
 
-            # Step 5: TODO - Send notifications (Phase 9)
-            # self._send_job_notifications(matched_jobs)
+            # Step 5: Send notifications (Phase 9)
+            if matched_jobs:
+                self._send_job_notifications(matched_jobs)
 
             # Summary
             elapsed = time.time() - start_time
@@ -3062,4 +3063,131 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
     # Notifications (Phase 9)
     # ============================================================================
 
-    # TODO: Implement _send_job_notification() in Phase 9
+    def _send_job_notifications(self, matched_jobs: List[Dict[str, Any]]):
+        """
+        Send Telegram notifications for matched jobs, prioritizing NEW postings (Phase 9).
+
+        Args:
+            matched_jobs: List of job dictionaries with score, job data, and metadata
+        """
+        try:
+            if not matched_jobs:
+                self.logger.info("jobhunter-service: No matched jobs to notify")
+                return
+
+            # Get notification settings
+            min_score = self.config.get('min_match_score', 60)
+            max_notifications = self.config.get('max_notifications_per_run', 10)
+
+            # Filter jobs that meet notification threshold
+            notify_jobs = [m for m in matched_jobs if m['score'] >= min_score]
+
+            if not notify_jobs:
+                self.logger.info(f"jobhunter-service: No jobs scored >= {min_score} (notification threshold)")
+                return
+
+            # Limit to max notifications
+            if len(notify_jobs) > max_notifications:
+                self.logger.info(f"jobhunter-service: Limiting notifications to top {max_notifications} jobs")
+                notify_jobs = notify_jobs[:max_notifications]
+
+            # Separate NEW jobs from existing jobs
+            new_jobs = [m for m in notify_jobs if m['job'].get('is_new', 0) == 1]
+            existing_jobs = [m for m in notify_jobs if m['job'].get('is_new', 0) == 0]
+
+            # Sort: NEW jobs first (by score), then existing jobs (by score)
+            sorted_jobs = sorted(new_jobs, key=lambda x: x['score'], reverse=True) + \
+                         sorted(existing_jobs, key=lambda x: x['score'], reverse=True)
+
+            self.logger.info(f"jobhunter-service: Sending notifications for {len(sorted_jobs)} jobs ({len(new_jobs)} new, {len(existing_jobs)} existing)")
+
+            # Send header message
+            if new_jobs:
+                header = f"🆕 **JobHunter Alert:** {len(new_jobs)} NEW job(s) found!"
+            else:
+                header = f"📋 **JobHunter Alert:** {len(existing_jobs)} job(s) matched your criteria"
+
+            self._send_response("broadcast", header)
+
+            # Send individual job notifications
+            for i, match in enumerate(sorted_jobs, 1):
+                self._send_job_notification(match, index=i, total=len(sorted_jobs))
+                time.sleep(0.5)  # Rate limiting between notifications
+
+            # Mark NEW jobs as seen after notification
+            for match in new_jobs:
+                self.db_manager.mark_job_as_seen(match['job']['id'])
+
+            self.logger.info(f"jobhunter-service: ✅ Sent {len(sorted_jobs)} job notifications")
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error sending notifications: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+
+    def _send_job_notification(self, match: Dict[str, Any], index: int = 1, total: int = 1):
+        """
+        Send a single job notification with markdown formatting.
+
+        Args:
+            match: Job match dictionary with 'job', 'score', and metadata
+            index: Notification number in batch
+            total: Total number of notifications
+        """
+        try:
+            job = match['job']
+            score = match['score']
+
+            # Build notification message with markdown
+            message = f"\n**Job {index}/{total}**"
+
+            # Add freshness indicator
+            if job.get('is_new', 0) == 1:
+                message += " 🆕 **NEW!**"
+
+            message += f"\n**Score:** {score}"
+            message += f"\n\n**{job['title']}**"
+
+            # Location
+            if job.get('location'):
+                message += f"\n📍 {job['location']}"
+
+            # Company
+            company_name = job.get('company_name', 'Unknown Company')
+            message += f"\n🏢 {company_name}"
+
+            # Salary (if available from deep scrape)
+            if job.get('salary_text'):
+                message += f"\n💰 {job['salary_text']}"
+            elif job.get('salary_min') and job.get('salary_max'):
+                message += f"\n💰 ${job['salary_min']:,} - ${job['salary_max']:,}"
+            elif job.get('salary_min'):
+                message += f"\n💰 ${job['salary_min']:,}+"
+
+            # Freshness information
+            if job.get('first_seen_date'):
+                from datetime import datetime
+                first_seen = datetime.fromisoformat(job['first_seen_date'].replace('Z', '+00:00'))
+                now = datetime.now(first_seen.tzinfo) if first_seen.tzinfo else datetime.now()
+                age_days = (now - first_seen).days
+
+                if age_days == 0:
+                    message += f"\n⏱️ First seen today"
+                elif age_days == 1:
+                    message += f"\n⏱️ First seen yesterday"
+                elif age_days <= 7:
+                    message += f"\n⏱️ First seen {age_days} days ago"
+
+            # URL
+            message += f"\n\n🔗 **Apply:** {job['url']}"
+
+            # Send to broadcast (Telegram + all channels)
+            self._send_response("broadcast", message)
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Sent notification for: {job['title']}")
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error sending job notification: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")

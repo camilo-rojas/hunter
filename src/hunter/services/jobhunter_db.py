@@ -387,6 +387,25 @@ class JobHunterDatabaseManager:
             self.logger.debug(f"Updated job ID {job_id} with full details")
             return True
 
+    def mark_job_as_seen(self, job_id: int) -> bool:
+        """
+        Mark a job as seen (no longer new) after notification (Phase 9).
+
+        Args:
+            job_id: Job posting ID
+
+        Returns:
+            True if successful
+        """
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE job_postings
+                SET is_new = 0
+                WHERE id = ?
+            """, (job_id,))
+            self.logger.debug(f"Marked job ID {job_id} as seen (is_new=0)")
+            return True
+
     def get_job_by_id(self, job_id: int) -> Optional[Dict[str, Any]]:
         """Get a job posting by ID."""
         with self._get_connection() as conn:
