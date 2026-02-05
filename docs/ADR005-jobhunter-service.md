@@ -502,10 +502,60 @@ config:
 - Simple regex for location/salary extraction
 - Works for ~60-70% of career pages
 
-**Phase 2 (Future):** Platform-Specific Parsers
-- **Greenhouse**: JSON API endpoints (structured data)
-- **Lever**: HTML with data attributes (structured)
-- **Workday**: Complex (may need browser automation)
+**Phase 2 (Partial - Greenhouse Complete):** Platform-Specific Parsers
+- **Greenhouse**: ✅ IMPLEMENTED (2026-02-04)
+  - Dual-strategy parser: JSON extraction from `<script>` tags (preferred) or structured HTML fallback
+  - Method `_scrape_greenhouse()` in `jobhunter_service.py`
+  - More reliable than generic parser for Greenhouse-hosted boards
+  - Used by: Anthropic and many tech companies
+  - Routes automatically when company `scraper_type='greenhouse'`
+- **Lever**: Future - HTML with data attributes (structured)
+- **Workday**: Future - Complex (may need browser automation)
+
+**Verbose Logging Configuration:** ✅ IMPLEMENTED (2026-02-04)
+
+The service supports configurable logging verbosity to reduce log noise during scheduled runs:
+
+```yaml
+config:
+  verbose_logging: false  # Default: false (concise executive summary)
+```
+
+**When `verbose_logging: false` (DEFAULT - Recommended for Production):**
+- Shows only executive summary:
+  - Start banner: "🚀 Starting Daily Scrape Workflow"
+  - Final statistics: companies scraped, total jobs, new jobs, matches, deep scraped count, time elapsed
+  - Errors and warnings (always shown)
+- **Benefits**: Clean logs, easy to parse, focuses on outcomes
+- **Output example**:
+  ```
+  ============================================================
+  jobhunter-service: 🚀 Starting Daily Scrape Workflow
+  ============================================================
+
+  ============================================================
+  jobhunter-service: ✨ Daily Scrape Workflow Complete
+  jobhunter-service:    • Companies scraped: 1
+  jobhunter-service:    • Total jobs found: 62
+  jobhunter-service:    • New jobs: 0
+  jobhunter-service:    • High-scoring matches: 27
+  jobhunter-service:    • Deep scraped: 20
+  jobhunter-service:    • Time elapsed: 1.4 minutes
+  ============================================================
+  ```
+
+**When `verbose_logging: true` (Debugging/Development):**
+- Shows detailed progress for every operation:
+  - Individual company scraping: "🔍 Scraping 1/1: Anthropic"
+  - Scraper selection: "Using Greenhouse parser for..."
+  - Job counts per company: "✅ 62 jobs found, 0 new"
+  - Scoring progress: "🎯 Scoring jobs against criteria..."
+  - Deep scrape progress: "Deep scraping 1/20: Job Title..."
+  - Individual job success: "Successfully deep scraped job 123"
+- **Benefits**: Detailed debugging, progress tracking, development visibility
+- **Use when**: Troubleshooting scraper issues, monitoring first runs, development
+
+**Implementation**: Controlled via `self.verbose_logging` flag checked before logging non-essential progress messages.
 
 **Error Handling:**
 ```python
@@ -2184,7 +2234,7 @@ class TestPhase5_5DeepScraping:
 - Scoring includes salary ranges correctly
 - Job detail view displays full deep-scraped data
 
-### Phase 7: Schedule Management - Multiple Run Times (2 hours)
+### Phase 7: Schedule Management - Multiple Run Times ✅ COMPLETE (2026-02-04)
 1. Extend database schema to store run times
    - Add `run_schedules` table (id, run_time, timezone, active, created_date)
    - Support multiple scheduled times per day
@@ -2373,7 +2423,7 @@ CREATE TABLE IF NOT EXISTS run_schedules (
 - Can disable/enable schedules without deleting
 - Service survives schedule changes while running
 
-### Phase 8: Job Freshness Detection & Prioritization (2-3 hours)
+### Phase 8: Job Freshness Detection & Prioritization ✅ COMPLETE (2026-02-04)
 This phase implements **NEW job detection** to prioritize fresh postings that weren't in the previous scrape.
 
 **Business Rationale:**
