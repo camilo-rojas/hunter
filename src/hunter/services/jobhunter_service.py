@@ -81,6 +81,9 @@ class JobHunterService(BaseService):
         self.threshold_review = thresholds.get('review', 40)
         self.threshold_low_priority = thresholds.get('low_priority', 0)
 
+        # Logging verbosity (default: false for concise executive summary)
+        self.verbose_logging = self.config.get('verbose_logging', False)
+
         # Initialize database manager (will be initialized during start_service)
         self.db_manager: Optional[JobHunterDatabaseManager] = None
 
@@ -1461,7 +1464,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             jobs = self._scrape_company(
                 company_id=company['id'],
                 company_name=company['name'],
-                careers_url=company['careers_url']
+                careers_url=company['careers_url'],
+                scraper_type=company.get('scraper_type', 'generic')
             )
 
             # Save jobs to database (skip duplicates gracefully)
@@ -2333,7 +2337,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 self.logger.warning(f"jobhunter-service: Error extracting job from element: {e}")
                 continue
 
-        self.logger.info(f"jobhunter-service: Extracted {len(jobs)} jobs from HTML")
+        if self.verbose_logging:
+            self.logger.info(f"jobhunter-service: Extracted {len(jobs)} jobs from HTML")
         return jobs
 
     def _deep_scrape_job(self, job_id: int, job_url: str) -> bool:
@@ -2349,11 +2354,13 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
         """
         try:
             # Fetch job detail page with politeness delay
-            self.logger.info(f"jobhunter-service: Deep scraping job {job_id}: {job_url}")
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Deep scraping job {job_id}: {job_url}")
             html = self._fetch_with_retry(job_url, politeness_delay=2.0)
 
             if not html:
-                self.logger.warning(f"jobhunter-service: Failed to fetch job {job_id}")
+                if self.verbose_logging:
+                    self.logger.warning(f"jobhunter-service: Failed to fetch job {job_id}")
                 return False
 
             soup = BeautifulSoup(html, 'lxml')
@@ -2412,10 +2419,12 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                     salary_min=salary_min,
                     salary_max=salary_max
                 )
-                self.logger.info(f"jobhunter-service: Successfully deep scraped job {job_id}")
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service: Successfully deep scraped job {job_id}")
                 return True
             else:
-                self.logger.warning(f"jobhunter-service: No additional details extracted for job {job_id}")
+                if self.verbose_logging:
+                    self.logger.warning(f"jobhunter-service: No additional details extracted for job {job_id}")
                 return False
 
         except Exception as e:
@@ -2435,10 +2444,12 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
         success_count = 0
         total = len(matched_jobs)
 
-        self.logger.info(f"jobhunter-service: Starting deep scrape for {total} matched jobs")
+        if self.verbose_logging:
+            self.logger.info(f"jobhunter-service: Starting deep scrape for {total} matched jobs")
 
         for i, job in enumerate(matched_jobs, 1):
-            self.logger.info(f"jobhunter-service: Deep scraping {i}/{total}: {job.get('title', 'Unknown')}")
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Deep scraping {i}/{total}: {job.get('title', 'Unknown')}")
 
             # Deep scrape with politeness delay
             if self._deep_scrape_job(job['id'], job['url']):
@@ -2448,11 +2459,110 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             if i < total:  # Don't sleep after the last one
                 time.sleep(2.0)
 
-        self.logger.info(f"jobhunter-service: Deep scrape complete: {success_count}/{total} successful")
+        if self.verbose_logging:
+            self.logger.info(f"jobhunter-service: Deep scrape complete: {success_count}/{total} successful")
         return success_count
 
+    def _scrape_greenhouse(self, careers_url: str) -> List[Dict[str, Any]]:
+        """
+        Scrape jobs from a Greenhouse job board using their embedded JSON data.
+
+        Greenhouse boards expose job data in multiple formats:
+        1. Embedded JSON in <script> tags (most reliable)
+        2. Structured HTML with data attributes
+        3. JSON API endpoint (may require authentication)
+
+        Args:
+            careers_url: URL of Greenhouse job board (e.g., https://job-boards.greenhouse.io/anthropic/jobs)
+
+        Returns:
+            List of job dictionaries with keys: title, url, location, description
+        """
+        try:
+            import json
+            import re
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Using Greenhouse parser for {careers_url}")
+
+            # Fetch the job board page
+            html = self._fetch_with_retry(careers_url, politeness_delay=2.0)
+            if not html:
+                if self.verbose_logging:
+                    self.logger.warning(f"jobhunter-service: Failed to fetch Greenhouse board")
+                return []
+
+            soup = BeautifulSoup(html, 'lxml')
+            jobs = []
+
+            # Method 1: Look for embedded JSON data (most reliable)
+            # Greenhouse often embeds job data in <script> tags
+            script_tags = soup.find_all('script', type='application/json')
+            for script in script_tags:
+                try:
+                    data = json.loads(script.string)
+                    if isinstance(data, dict) and 'jobs' in data:
+                        for job_data in data['jobs']:
+                            jobs.append({
+                                'title': job_data.get('title', 'Unknown'),
+                                'url': job_data.get('absolute_url', job_data.get('url', '')),
+                                'location': job_data.get('location', {}).get('name', '') if isinstance(job_data.get('location'), dict) else job_data.get('location', ''),
+                                'description': job_data.get('content', '')
+                            })
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    self.logger.debug(f"jobhunter-service: Skipping script tag (not job data): {e}")
+                    continue
+
+            # Method 2: Parse structured HTML (fallback)
+            if not jobs:
+                self.logger.debug(f"jobhunter-service: No JSON data found, parsing Greenhouse HTML structure")
+
+                # Greenhouse uses <div class="opening"> for job listings
+                job_elements = soup.find_all('div', class_='opening')
+
+                for elem in job_elements:
+                    # Extract title and URL
+                    link = elem.find('a')
+                    if not link:
+                        continue
+
+                    title = link.get_text(strip=True)
+                    url = link.get('href', '')
+
+                    # Make URL absolute if needed
+                    if url and not url.startswith('http'):
+                        if careers_url.endswith('/jobs'):
+                            base_url = careers_url.rsplit('/jobs', 1)[0]
+                        else:
+                            base_url = careers_url.rstrip('/')
+                        url = f"{base_url}/jobs/{url.lstrip('/')}"
+
+                    # Extract location (usually in a <span> or <div> with class containing 'location')
+                    location = ''
+                    location_elem = elem.find(['span', 'div'], class_=re.compile(r'location', re.IGNORECASE))
+                    if location_elem:
+                        location = location_elem.get_text(strip=True)
+
+                    jobs.append({
+                        'title': title,
+                        'url': url,
+                        'location': location,
+                        'description': ''  # Will be filled by deep scrape
+                    })
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Greenhouse parser found {len(jobs)} jobs")
+            return jobs
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error in Greenhouse parser: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
+
     def _scrape_company(self, company_id: int, company_name: str, careers_url: str,
-                       check_robots: bool = False, politeness_delay: float = 2.0) -> List[Dict[str, Any]]:
+                       scraper_type: str = 'generic', check_robots: bool = False,
+                       politeness_delay: float = 2.0) -> List[Dict[str, Any]]:
         """
         Scrape jobs from a company's career page with deduplication.
 
@@ -2460,7 +2570,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             company_id: Company ID from database
             company_name: Company name (for logging)
             careers_url: URL of career page
-            check_robots: Whether to check robots.txt (default: True)
+            scraper_type: Type of scraper to use ('generic', 'greenhouse', 'lever', 'workday')
+            check_robots: Whether to check robots.txt (default: False)
             politeness_delay: Delay in seconds before request (default: 2.0)
 
         Returns:
@@ -2469,7 +2580,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
         import hashlib
 
         try:
-            self.logger.info(f"jobhunter-service: Scraping {company_name} ({careers_url})")
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Scraping {company_name} ({careers_url}) [scraper: {scraper_type}]")
 
             # Check robots.txt first (be a good citizen)
             if check_robots:
@@ -2477,11 +2589,23 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                     self.logger.warning(f"jobhunter-service: {company_name}: Scraping disallowed by robots.txt. Skipping.")
                     return []
 
-            # Fetch HTML with politeness delay
-            html = self._fetch_with_retry(careers_url, politeness_delay=politeness_delay)
-
-            # Parse HTML to extract jobs
-            jobs = self._scrape_generic_html(html, careers_url)
+            # Route to appropriate scraper based on type
+            if scraper_type.lower() == 'greenhouse':
+                jobs = self._scrape_greenhouse(careers_url)
+            elif scraper_type.lower() == 'lever':
+                # TODO: Implement Lever parser (Phase 2 - Future)
+                self.logger.warning(f"jobhunter-service: Lever parser not implemented yet, falling back to generic")
+                html = self._fetch_with_retry(careers_url, politeness_delay=politeness_delay)
+                jobs = self._scrape_generic_html(html, careers_url)
+            elif scraper_type.lower() == 'workday':
+                # TODO: Implement Workday parser (Phase 2 - Future, may need browser automation)
+                self.logger.warning(f"jobhunter-service: Workday parser not implemented yet, falling back to generic")
+                html = self._fetch_with_retry(careers_url, politeness_delay=politeness_delay)
+                jobs = self._scrape_generic_html(html, careers_url)
+            else:
+                # Generic HTML parser (default)
+                html = self._fetch_with_retry(careers_url, politeness_delay=politeness_delay)
+                jobs = self._scrape_generic_html(html, careers_url)
 
             if not jobs:
                 self.logger.warning(f"jobhunter-service: {company_name}: No jobs found")
@@ -2506,7 +2630,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
 
                 new_jobs.append(job)
 
-            self.logger.info(f"jobhunter-service: {company_name}: Found {len(jobs)} jobs, {len(new_jobs)} are new")
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: {company_name}: Found {len(jobs)} jobs, {len(new_jobs)} are new")
             return new_jobs
 
         except Exception as e:
@@ -2822,7 +2947,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 self.logger.warning("jobhunter-service: No active companies to scrape")
                 return
 
-            self.logger.info(f"jobhunter-service: 📋 Found {len(companies)} active companies")
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: 📋 Found {len(companies)} active companies")
 
             # Step 2: Light scrape all companies
             total_jobs_scraped = 0
@@ -2830,13 +2956,14 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
 
             for i, company in enumerate(companies, 1):
                 try:
-                    self.logger.info(f"jobhunter-service: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
+                    if self.verbose_logging:
+                        self.logger.info(f"jobhunter-service: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
 
                     jobs = self._scrape_company(
                         company_id=company['id'],
                         company_name=company['name'],
                         careers_url=company['careers_url'],
-                        scraper_type=company['scraper_type']
+                        scraper_type=company.get('scraper_type', 'generic')
                     )
 
                     # Count new jobs
@@ -2857,7 +2984,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                     total_jobs_scraped += len(jobs)
                     total_new_jobs += new_count
 
-                    self.logger.info(f"jobhunter-service:    ✅ {len(jobs)} jobs found, {new_count} new")
+                    if self.verbose_logging:
+                        self.logger.info(f"jobhunter-service:    ✅ {len(jobs)} jobs found, {new_count} new")
 
                     # Rate limiting between companies
                     if i < len(companies):
@@ -2867,10 +2995,12 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                     self.logger.error(f"jobhunter-service:    ❌ Failed to scrape {company['name']}: {e}")
                     continue
 
-            self.logger.info(f"jobhunter-service: \n📊 Light Scrape Summary: {total_jobs_scraped} total, {total_new_jobs} new jobs")
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: \n📊 Light Scrape Summary: {total_jobs_scraped} total, {total_new_jobs} new jobs")
 
             # Step 3: Score all recent jobs
-            self.logger.info("jobhunter-service: \n🎯 Scoring jobs against criteria...")
+            if self.verbose_logging:
+                self.logger.info("jobhunter-service: \n🎯 Scoring jobs against criteria...")
             recent_jobs = self.db_manager.get_recent_jobs(limit=1000)
             matched_jobs = []
 
@@ -2889,15 +3019,18 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             # Sort by score descending
             matched_jobs.sort(key=lambda x: x['score'], reverse=True)
 
-            self.logger.info(f"jobhunter-service:    ✅ {len(matched_jobs)} jobs scored >= {min_score}")
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service:    ✅ {len(matched_jobs)} jobs scored >= {min_score}")
 
             # Step 4: Deep scrape top matches
             if matched_jobs:
                 deep_scrape_limit = min(20, len(matched_jobs))  # Limit to top 20
-                self.logger.info(f"jobhunter-service: \n🔬 Deep scraping top {deep_scrape_limit} matches...")
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service: \n🔬 Deep scraping top {deep_scrape_limit} matches...")
 
                 success_count = self._deep_scrape_matches(matched_jobs[:deep_scrape_limit])
-                self.logger.info(f"jobhunter-service:    ✅ Successfully deep scraped {success_count}/{deep_scrape_limit} jobs")
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service:    ✅ Successfully deep scraped {success_count}/{deep_scrape_limit} jobs")
 
             # Step 5: TODO - Send notifications (Phase 9)
             # self._send_job_notifications(matched_jobs)
