@@ -891,8 +891,16 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
     # Response Helpers
     # ============================================================================
 
-    def _send_response(self, recipient: str, content: str, correlation_id: str = None):
-        """Send a response message."""
+    def _send_response(self, recipient: str, content: str, correlation_id: str = None, content_type: str = "text/plain"):
+        """
+        Send a response message.
+
+        Args:
+            recipient: Target service name
+            content: Message content
+            correlation_id: Optional correlation ID for request tracking
+            content_type: MIME type - "text/plain", "text/markdown", "text/html", "application/json"
+        """
         try:
             from robotray.core.messaging import MessageMetadata
 
@@ -900,14 +908,15 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 sender_service=self.name,
                 target_service=recipient,
                 priority=MessagePriority.NORMAL,
-                correlation_id=correlation_id
+                correlation_id=correlation_id,
+                content_type=content_type
             )
             message = SecureMessage(
                 payload={"content": content},
                 metadata=metadata
             )
             self.message_queues.outbound_queue.put_nowait(message)
-            self.logger.debug(f"jobhunter-service: Sent response to {recipient}")
+            self.logger.debug(f"jobhunter-service: Sent response to {recipient} (type: {content_type})")
         except Exception as e:
             self.logger.error(f"jobhunter-service: Failed to send response: {e}")
 
@@ -3103,11 +3112,11 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
 
             # Send header message
             if new_jobs:
-                header = f"🆕 **JobHunter Alert:** {len(new_jobs)} NEW job(s) found!"
+                header = f"🆕 *JobHunter Alert:* {len(new_jobs)} NEW job(s) found!"
             else:
-                header = f"📋 **JobHunter Alert:** {len(existing_jobs)} job(s) matched your criteria"
+                header = f"📋 *JobHunter Alert:* {len(existing_jobs)} job(s) matched your criteria"
 
-            self._send_response("broadcast", header)
+            self._send_response("broadcast", header, content_type="text/markdown")
 
             # Send individual job notifications
             for i, match in enumerate(sorted_jobs, 1):
@@ -3127,7 +3136,7 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
 
     def _send_job_notification(self, match: Dict[str, Any], index: int = 1, total: int = 1):
         """
-        Send a single job notification with markdown formatting.
+        Send a single job notification with Telegram markdown formatting.
 
         Args:
             match: Job match dictionary with 'job', 'score', and metadata
@@ -3138,15 +3147,15 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             job = match['job']
             score = match['score']
 
-            # Build notification message with markdown
-            message = f"\n**Job {index}/{total}**"
+            # Build notification message with Telegram markdown (* for bold, _ for italic)
+            message = f"\n*Job {index}/{total}*"
 
             # Add freshness indicator
             if job.get('is_new', 0) == 1:
-                message += " 🆕 **NEW!**"
+                message += " 🆕 *NEW!*"
 
-            message += f"\n**Score:** {score}"
-            message += f"\n\n**{job['title']}**"
+            message += f"\n*Score:* {score}"
+            message += f"\n\n*{job['title']}*"
 
             # Location
             if job.get('location'):
@@ -3178,11 +3187,11 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 elif age_days <= 7:
                     message += f"\n⏱️ First seen {age_days} days ago"
 
-            # URL
-            message += f"\n\n🔗 **Apply:** {job['url']}"
+            # URL (Telegram auto-linkifies URLs, no markdown needed)
+            message += f"\n\n🔗 *Apply:* {job['url']}"
 
-            # Send to broadcast (Telegram + all channels)
-            self._send_response("broadcast", message)
+            # Send to broadcast (Telegram + all channels) with markdown content type
+            self._send_response("broadcast", message, content_type="text/markdown")
 
             if self.verbose_logging:
                 self.logger.info(f"jobhunter-service: Sent notification for: {job['title']}")
