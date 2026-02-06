@@ -16,7 +16,7 @@ import sqlite3
 import os
 import time
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from robotray.services.jobhunter_service import JobHunterService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
@@ -206,6 +206,43 @@ class TestJobHunterDatabase:
         company = db_manager.get_company_by_id(company_id)
         assert company is not None
         assert company['active'] == 0
+
+    def test_reactivate_removed_company(self, db_manager):
+        """Test that adding a previously removed company reactivates it."""
+        # Add company
+        company_id = db_manager.add_company(
+            "Reactivate Test",
+            "https://old-url.com/careers",
+            scraper_type="generic"
+        )
+
+        # Remove it
+        db_manager.remove_company(company_id)
+
+        # Verify it's inactive
+        company = db_manager.get_company_by_id(company_id)
+        assert company['active'] == 0
+
+        # Add it again with new URL and scraper
+        reactivated_id = db_manager.add_company(
+            "Reactivate Test",
+            "https://new-url.com/jobs",
+            scraper_type="greenhouse"
+        )
+
+        # Should return the same ID
+        assert reactivated_id == company_id
+
+        # Should be active again with updated info
+        company = db_manager.get_company_by_id(company_id)
+        assert company['active'] == 1
+        assert company['careers_url'] == "https://new-url.com/jobs"
+        assert company['scraper_type'] == "greenhouse"
+
+        # Should appear in active companies
+        active_companies = db_manager.get_active_companies()
+        assert len(active_companies) == 1
+        assert active_companies[0]['name'] == "Reactivate Test"
 
 
 class TestJobHunterServiceLifecycle:
@@ -2971,10 +3008,357 @@ Note: This candidate would be perfect for the role.''')]
             'ai_analysis': {'enabled': False},
             'verbose_logging': False
         }
-        
+
         service = JobHunterService("test", config)
         assert service.ai_enabled is False
         assert service.anthropic_client is None
-        
+
         # Service should work normally without AI
         # (would need more setup for full workflow test)
+
+
+class TestParsers:
+    """Tests for job board parsers (Greenhouse, Ashby, etc.)."""
+
+    @pytest.fixture
+    def service(self, tmp_path):
+        """Create a JobHunterService for parser testing."""
+        temp_db = str(tmp_path / "test_parsers.db")
+        config = {
+            'database_path': temp_db,
+            'verbose_logging': True
+        }
+        service = JobHunterService("test-parser", config)
+        service.db_manager = JobHunterDatabaseManager(temp_db)
+        service.db_manager.initialize_database()
+        return service
+
+    # =========================================================================
+    # Ashby Parser Tests
+    # =========================================================================
+
+    def test_ashby_parser_extracts_app_data(self, service):
+        """Test Ashby parser extracts jobs from window.__appData."""
+        # Mock HTML with embedded __appData
+        mock_html = '''
+        <!DOCTYPE html>
+        <html>
+        <head><title>ElevenLabs Jobs</title></head>
+        <body>
+        <script>
+        window.__appData = {
+            "organization": {"name": "ElevenLabs"},
+            "jobPostings": [
+                {
+                    "id": "abc-123",
+                    "title": "Senior Software Engineer",
+                    "departmentName": "Engineering",
+                    "teamName": "Backend",
+                    "locationName": "San Francisco",
+                    "workplaceType": "Remote",
+                    "employmentType": "FullTime",
+                    "isListed": true
+                },
+                {
+                    "id": "def-456",
+                    "title": "Product Manager",
+                    "departmentName": "Product",
+                    "teamName": "",
+                    "locationName": "New York",
+                    "workplaceType": "Hybrid",
+                    "employmentType": "FullTime",
+                    "isListed": true
+                },
+                {
+                    "id": "ghi-789",
+                    "title": "Hidden Job",
+                    "departmentName": "Secret",
+                    "locationName": "Unknown",
+                    "isListed": false
+                }
+            ]
+        };
+        </script>
+        </body>
+        </html>
+        '''
+
+        # Mock the fetch method
+        service._fetch_with_retry = Mock(return_value=mock_html)
+
+        # Run parser
+        jobs = service._scrape_ashby("https://jobs.ashbyhq.com/elevenlabs")
+
+        # Verify results
+        assert len(jobs) == 2  # Hidden job should be excluded
+
+        # Check first job
+        assert jobs[0]['title'] == "Senior Software Engineer"
+        assert "Remote" in jobs[0]['location']
+        assert "San Francisco" in jobs[0]['location']
+        assert jobs[0]['url'] == "https://jobs.ashbyhq.com/elevenlabs/abc-123"
+        assert "Engineering" in jobs[0]['department']
+
+        # Check second job
+        assert jobs[1]['title'] == "Product Manager"
+        assert jobs[1]['location'] == "New York"
+
+    def test_ashby_parser_handles_missing_fields(self, service):
+        """Test Ashby parser handles jobs with missing optional fields."""
+        mock_html = '''
+        <script>
+        window.__appData = {
+            "jobPostings": [
+                {
+                    "id": "test-1",
+                    "title": "Engineer",
+                    "isListed": true
+                }
+            ]
+        };
+        </script>
+        '''
+
+        service._fetch_with_retry = Mock(return_value=mock_html)
+        jobs = service._scrape_ashby("https://jobs.ashbyhq.com/company")
+
+        assert len(jobs) == 1
+        assert jobs[0]['title'] == "Engineer"
+        assert jobs[0]['location'] == ""  # Missing field defaults to empty
+
+    def test_ashby_parser_handles_empty_response(self, service):
+        """Test Ashby parser handles empty or no jobs."""
+        mock_html = '''
+        <script>
+        window.__appData = {
+            "jobPostings": []
+        };
+        </script>
+        '''
+
+        service._fetch_with_retry = Mock(return_value=mock_html)
+        jobs = service._scrape_ashby("https://jobs.ashbyhq.com/company")
+
+        assert len(jobs) == 0
+
+    def test_ashby_parser_handles_fetch_failure(self, service):
+        """Test Ashby parser handles network failure gracefully."""
+        service._fetch_with_retry = Mock(return_value=None)
+        jobs = service._scrape_ashby("https://jobs.ashbyhq.com/company")
+
+        assert len(jobs) == 0
+
+    def test_ashby_parser_handles_invalid_json(self, service):
+        """Test Ashby parser handles malformed JSON."""
+        mock_html = '''
+        <script>
+        window.__appData = { invalid json here };
+        </script>
+        '''
+
+        service._fetch_with_retry = Mock(return_value=mock_html)
+        jobs = service._scrape_ashby("https://jobs.ashbyhq.com/company")
+
+        # Should return empty list, not crash
+        assert len(jobs) == 0
+
+    # =========================================================================
+    # Greenhouse Parser Tests
+    # =========================================================================
+
+    def test_greenhouse_api_parsing(self, service):
+        """Test Greenhouse parser uses API when available."""
+        mock_api_response = {
+            "jobs": [
+                {
+                    "title": "ML Engineer",
+                    "absolute_url": "https://job-boards.greenhouse.io/xai/jobs/123",
+                    "location": {"name": "Palo Alto, CA"},
+                    "content": "Build AI systems"
+                },
+                {
+                    "title": "Research Scientist",
+                    "absolute_url": "https://job-boards.greenhouse.io/xai/jobs/456",
+                    "location": "Remote",
+                    "content": "Conduct research"
+                }
+            ]
+        }
+
+        # Mock requests.get for the API call
+        with patch('requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_api_response
+            mock_get.return_value = mock_response
+
+            jobs = service._scrape_greenhouse("https://job-boards.greenhouse.io/xai")
+
+        assert len(jobs) == 2
+        assert jobs[0]['title'] == "ML Engineer"
+        assert jobs[0]['location'] == "Palo Alto, CA"
+        assert jobs[1]['title'] == "Research Scientist"
+        assert jobs[1]['location'] == "Remote"
+
+    def test_greenhouse_extracts_company_slug(self, service):
+        """Test Greenhouse parser extracts company slug from various URL formats."""
+        # Mock API to return empty to test slug extraction
+        with patch('requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"jobs": []}
+            mock_get.return_value = mock_response
+
+            # Test different URL formats
+            service._scrape_greenhouse("https://job-boards.greenhouse.io/xai")
+            service._scrape_greenhouse("https://boards.greenhouse.io/anthropic")
+
+            # Verify API was called with correct slugs
+            calls = mock_get.call_args_list
+            assert "xai" in calls[0][0][0]
+            assert "anthropic" in calls[1][0][0]
+
+    # =========================================================================
+    # Ashby Deep Scrape Tests
+    # =========================================================================
+
+    def test_ashby_deep_scrape_extracts_description(self, service):
+        """Test Ashby deep scraper extracts full job description."""
+        # Add a test company first (foreign key constraint)
+        company_id = service.db_manager.add_company(
+            name="Test Company",
+            careers_url="https://jobs.ashbyhq.com/test",
+            scraper_type="ashby"
+        )
+
+        # Add a test job to the database
+        job_id = service.db_manager.add_job_posting(
+            company_id=company_id,
+            job_hash="test-hash-123",
+            title="Test Engineer",
+            url="https://jobs.ashbyhq.com/test/abc-123",
+            location="Remote",
+            description="Engineering"  # Short placeholder description
+        )
+
+        # Mock HTML from job detail page with posting structure
+        mock_html = '''
+        <script>
+        window.__appData = {
+            "posting": {
+                "id": "abc-123",
+                "title": "Test Engineer",
+                "descriptionHtml": "<p>This is a long job description with details about the role. We are looking for talented engineers to join our team. You will work on exciting projects and have the opportunity to grow your career.</p>",
+                "descriptionPlainText": "This is a long job description with details about the role. We are looking for talented engineers to join our team. You will work on exciting projects.",
+                "departmentName": "Engineering",
+                "locationName": "Remote"
+            }
+        };
+        </script>
+        '''
+
+        service._fetch_with_retry = Mock(return_value=mock_html)
+
+        # Run deep scraper
+        result = service._deep_scrape_ashby_job(job_id, "https://jobs.ashbyhq.com/test/abc-123")
+
+        assert result is True
+
+        # Verify description was updated
+        job = service.db_manager.get_job_by_id(job_id)
+        assert job is not None
+        assert len(job.get('description', '')) > 100
+        assert "talented engineers" in job.get('description', '')
+
+    def test_ashby_deep_scrape_handles_missing_data(self, service):
+        """Test Ashby deep scraper handles missing posting data gracefully."""
+        # Add a test company first (foreign key constraint)
+        company_id = service.db_manager.add_company(
+            name="Test Company 2",
+            careers_url="https://jobs.ashbyhq.com/test2",
+            scraper_type="ashby"
+        )
+
+        job_id = service.db_manager.add_job_posting(
+            company_id=company_id,
+            job_hash="test-hash-456",
+            title="Test Job",
+            url="https://jobs.ashbyhq.com/test/def-456",
+            location="NYC"
+        )
+
+        # Mock HTML without posting data
+        mock_html = '''
+        <script>
+        window.__appData = {
+            "organization": {"name": "Test Co"}
+        };
+        </script>
+        '''
+
+        service._fetch_with_retry = Mock(return_value=mock_html)
+
+        result = service._deep_scrape_ashby_job(job_id, "https://jobs.ashbyhq.com/test/def-456")
+
+        # Should return False because no description found
+        assert result is False
+
+    def test_ashby_deep_scrape_url_routing(self, service):
+        """Test that ashbyhq.com URLs route to Ashby deep scraper."""
+        service._deep_scrape_ashby_job = Mock(return_value=True)
+
+        result = service._deep_scrape_job(123, "https://jobs.ashbyhq.com/elevenlabs/abc-123")
+
+        service._deep_scrape_ashby_job.assert_called_once_with(123, "https://jobs.ashbyhq.com/elevenlabs/abc-123")
+
+    def test_greenhouse_deep_scrape_url_routing(self, service):
+        """Test that greenhouse.io URLs route to Greenhouse deep scraper."""
+        service._deep_scrape_greenhouse_job = Mock(return_value=True)
+
+        result = service._deep_scrape_job(456, "https://job-boards.greenhouse.io/anthropic/jobs/123")
+
+        service._deep_scrape_greenhouse_job.assert_called_once_with(456, "https://job-boards.greenhouse.io/anthropic/jobs/123")
+
+    # =========================================================================
+    # Scraper Routing Tests
+    # =========================================================================
+
+    def test_scraper_type_routing_greenhouse(self, service):
+        """Test that greenhouse scraper type routes correctly."""
+        service._scrape_greenhouse = Mock(return_value=[{'title': 'Test', 'url': 'http://test.com', 'location': '', 'description': ''}])
+
+        jobs = service._scrape_company(
+            company_id=1,
+            company_name="Test Co",
+            careers_url="https://test.com/jobs",
+            scraper_type="greenhouse"
+        )
+
+        assert service._scrape_greenhouse.called
+
+    def test_scraper_type_routing_ashby(self, service):
+        """Test that ashby scraper type routes correctly."""
+        service._scrape_ashby = Mock(return_value=[{'title': 'Test', 'url': 'http://test.com', 'location': '', 'description': ''}])
+
+        jobs = service._scrape_company(
+            company_id=1,
+            company_name="Test Co",
+            careers_url="https://jobs.ashbyhq.com/test",
+            scraper_type="ashby"
+        )
+
+        assert service._scrape_ashby.called
+
+    def test_scraper_type_routing_generic(self, service):
+        """Test that generic scraper type uses HTML parser."""
+        service._fetch_with_retry = Mock(return_value="<html></html>")
+        service._scrape_generic_html = Mock(return_value=[])
+
+        jobs = service._scrape_company(
+            company_id=1,
+            company_name="Test Co",
+            careers_url="https://test.com/jobs",
+            scraper_type="generic"
+        )
+
+        assert service._scrape_generic_html.called

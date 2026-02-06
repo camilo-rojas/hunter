@@ -2723,7 +2723,11 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             if 'greenhouse.io' in job_url:
                 return self._deep_scrape_greenhouse_job(job_id, job_url)
 
-            # Fetch job detail page with politeness delay (non-Greenhouse)
+            # Check if this is an Ashby job
+            if 'ashbyhq.com' in job_url:
+                return self._deep_scrape_ashby_job(job_id, job_url)
+
+            # Fetch job detail page with politeness delay (non-Greenhouse/Ashby)
             if self.verbose_logging:
                 self.logger.info(f"jobhunter-service: Deep scraping job {job_id}: {job_url}")
             html = self._fetch_with_retry(job_url, politeness_delay=2.0)
@@ -2896,6 +2900,139 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
 
         except Exception as e:
             self.logger.error(f"jobhunter-service: Error deep scraping Greenhouse job {job_id}: {e}")
+            return False
+
+    def _deep_scrape_ashby_job(self, job_id: int, job_url: str) -> bool:
+        """
+        Deep scrape an Ashby job to get full details.
+
+        Ashby job detail pages contain the full job description in window.__appData JSON.
+
+        Args:
+            job_id: Database ID of job to update
+            job_url: Ashby job URL (e.g., https://jobs.ashbyhq.com/elevenlabs/uuid)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import json
+            import re
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Deep scraping Ashby job {job_id}: {job_url}")
+
+            # Fetch the job detail page
+            html = self._fetch_with_retry(job_url, politeness_delay=2.0)
+            if not html:
+                self.logger.warning(f"jobhunter-service: Failed to fetch Ashby job page {job_id}")
+                return False
+
+            # Extract __appData JSON using brace counting (same as light scrape)
+            app_data_start = html.find('window.__appData')
+            if app_data_start == -1:
+                app_data_start = html.find('__appData')
+
+            if app_data_start == -1:
+                self.logger.warning(f"jobhunter-service: No __appData found in Ashby job page {job_id}")
+                return False
+
+            # Find the opening brace
+            json_start = html.find('{', app_data_start)
+            if json_start == -1:
+                return False
+
+            # Use brace counting to find the matching closing brace
+            brace_count = 0
+            json_end = json_start
+            for i, char in enumerate(html[json_start:], start=json_start):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_end = i + 1
+                        break
+
+            json_str = html[json_start:json_end]
+            try:
+                app_data = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                self.logger.warning(f"jobhunter-service: Failed to parse Ashby job JSON: {e}")
+                return False
+
+            # Extract job description from the data
+            # Ashby uses 'posting' key for job detail pages (not 'job' or 'jobPosting')
+            description = None
+            posting = app_data.get('posting') or app_data.get('job') or app_data.get('jobPosting') or {}
+
+            # Try various fields for description
+            description = (
+                posting.get('descriptionHtml') or
+                posting.get('descriptionPlainText') or
+                posting.get('descriptionPlain') or
+                posting.get('description') or
+                app_data.get('descriptionHtml') or
+                app_data.get('description', '')
+            )
+
+            # Clean HTML tags if present
+            if description and '<' in description:
+                # Strip HTML but preserve some structure
+                soup = BeautifulSoup(description, 'lxml')
+                description = soup.get_text(separator='\n', strip=True)
+
+            # Extract salary if present
+            salary_text = None
+            salary_min = None
+            salary_max = None
+
+            # Check for salary in compensation field
+            compensation = posting.get('compensation') or posting.get('compensationTierSummary')
+            if compensation:
+                salary_text = compensation if isinstance(compensation, str) else str(compensation)
+
+            # Also look for salary patterns in description
+            if description and not salary_text:
+                salary_patterns = [
+                    r'\$(\d{1,3}(?:,\d{3})*(?:k)?)\s*-\s*\$(\d{1,3}(?:,\d{3})*(?:k)?)',
+                    r'\$(\d{1,3}(?:,\d{3})*(?:k)?)\+',
+                ]
+
+                for pattern in salary_patterns:
+                    match = re.search(pattern, description, re.IGNORECASE)
+                    if match:
+                        salary_text = match.group(0)
+                        if '-' in salary_text:
+                            salary_min = self._parse_salary(match.group(1))
+                            salary_max = self._parse_salary(match.group(2))
+                        else:
+                            salary_min = self._parse_salary(match.group(1))
+                        break
+
+            # Update database
+            if description and len(description) > 50:
+                self.db_manager.update_job_details(
+                    job_id=job_id,
+                    description=description,
+                    salary_text=salary_text,
+                    salary_min=salary_min,
+                    salary_max=salary_max
+                )
+                if self.verbose_logging:
+                    self.logger.info(
+                        f"jobhunter-service: Ashby deep scrape returned {len(description)} chars for job {job_id}"
+                    )
+                return True
+            else:
+                self.logger.warning(
+                    f"jobhunter-service: No valid description found in Ashby job page {job_id} "
+                    f"(got {len(description) if description else 0} chars)"
+                )
+                return False
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error deep scraping Ashby job {job_id}: {e}")
             return False
 
     def _deep_scrape_matches(self, matched_jobs: List[Dict[str, Any]]) -> int:
@@ -3105,6 +3242,154 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
+    def _scrape_ashby(self, careers_url: str) -> List[Dict[str, Any]]:
+        """
+        Scrape jobs from an Ashby job board.
+
+        Ashby boards embed job data as JSON in window.__appData within a <script> tag.
+        Structure: { jobPostings: [...], organization: {...}, ... }
+
+        Args:
+            careers_url: URL of Ashby job board (e.g., https://jobs.ashbyhq.com/elevenlabs)
+
+        Returns:
+            List of job dictionaries with keys: title, url, location, description, department
+        """
+        try:
+            import json
+            import re
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Using Ashby parser for {careers_url}")
+
+            # Fetch the HTML page
+            html = self._fetch_with_retry(careers_url, politeness_delay=2.0)
+            if not html:
+                self.logger.warning(f"jobhunter-service: Failed to fetch Ashby board HTML")
+                return []
+
+            jobs = []
+
+            # Method 1: Extract window.__appData JSON from script tags
+            # Find the start of __appData and extract JSON using brace matching
+            app_data_start = html.find('window.__appData')
+            if app_data_start == -1:
+                app_data_start = html.find('__appData')
+
+            app_data = None
+            if app_data_start != -1:
+                # Find the opening brace
+                json_start = html.find('{', app_data_start)
+                if json_start != -1:
+                    # Use brace counting to find the matching closing brace
+                    brace_count = 0
+                    json_end = json_start
+                    for i, char in enumerate(html[json_start:], start=json_start):
+                        if char == '{':
+                            brace_count += 1
+                        elif char == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                json_end = i + 1
+                                break
+
+                    json_str = html[json_start:json_end]
+                    try:
+                        app_data = json.loads(json_str)
+                        if self.verbose_logging:
+                            self.logger.info(f"jobhunter-service: Extracted Ashby __appData ({len(json_str)} chars)")
+                    except json.JSONDecodeError as e:
+                        self.logger.warning(f"jobhunter-service: Failed to parse Ashby JSON: {e}")
+
+            if app_data:
+                # Extract job postings from the data
+                # Ashby structure: jobPostings can be at top level OR inside jobBoard
+                job_postings = app_data.get('jobPostings', [])
+                if not job_postings and 'jobBoard' in app_data:
+                    job_postings = app_data['jobBoard'].get('jobPostings', [])
+
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service: Ashby __appData contains {len(job_postings)} job postings")
+
+                for job_data in job_postings:
+                    # Skip unlisted jobs
+                    if not job_data.get('isListed', True):
+                        continue
+
+                    # Build job URL
+                    job_id = job_data.get('id', '')
+                    job_url = f"{careers_url.rstrip('/')}/{job_id}" if job_id else ''
+
+                    # Extract location info
+                    location = job_data.get('locationName', '')
+                    workplace_type = job_data.get('workplaceType', '')
+                    if workplace_type and workplace_type.lower() == 'remote':
+                        location = f"Remote - {location}" if location else "Remote"
+
+                    # Get department/team info
+                    department = job_data.get('departmentName', '')
+                    team = job_data.get('teamName', '')
+                    dept_info = f"{department} / {team}" if department and team else (department or team)
+
+                    jobs.append({
+                        'title': job_data.get('title', 'Unknown'),
+                        'url': job_url,
+                        'location': location,
+                        'description': dept_info,  # Store department as description placeholder
+                        'department': dept_info,
+                        'employment_type': job_data.get('employmentType', ''),
+                    })
+
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service: Ashby parser extracted {len(jobs)} listed jobs")
+
+                return jobs
+
+            # Method 2: Fallback - try parsing HTML structure
+            if not jobs:
+                self.logger.debug(f"jobhunter-service: No __appData found, trying HTML parsing for Ashby")
+                soup = BeautifulSoup(html, 'lxml')
+
+                # Ashby uses various class names for job listings
+                # Look for job cards/links
+                job_links = soup.find_all('a', href=re.compile(r'/[a-f0-9-]{36}'))  # UUID pattern in URLs
+
+                for link in job_links:
+                    title_elem = link.find(['h3', 'h4', 'div', 'span'])
+                    if title_elem:
+                        title = title_elem.get_text(strip=True)
+                        url = link.get('href', '')
+
+                        # Make URL absolute
+                        if url and not url.startswith('http'):
+                            url = f"{careers_url.rstrip('/')}{url}"
+
+                        # Try to find location nearby
+                        location = ''
+                        parent = link.parent
+                        if parent:
+                            location_elem = parent.find(string=re.compile(r'Remote|Hybrid|On-?site', re.IGNORECASE))
+                            if location_elem:
+                                location = location_elem.strip()
+
+                        jobs.append({
+                            'title': title,
+                            'url': url,
+                            'location': location,
+                            'description': ''
+                        })
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Ashby parser found {len(jobs)} jobs total")
+
+            return jobs
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error in Ashby parser: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
+
     def _scrape_company(self, company_id: int, company_name: str, careers_url: str,
                        scraper_type: str = 'generic', check_robots: bool = False,
                        politeness_delay: float = 2.0) -> List[Dict[str, Any]]:
@@ -3115,7 +3400,7 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             company_id: Company ID from database
             company_name: Company name (for logging)
             careers_url: URL of career page
-            scraper_type: Type of scraper to use ('generic', 'greenhouse', 'lever', 'workday')
+            scraper_type: Type of scraper to use ('generic', 'greenhouse', 'ashby', 'lever', 'workday')
             check_robots: Whether to check robots.txt (default: False)
             politeness_delay: Delay in seconds before request (default: 2.0)
 
@@ -3137,6 +3422,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             # Route to appropriate scraper based on type
             if scraper_type.lower() == 'greenhouse':
                 jobs = self._scrape_greenhouse(careers_url)
+            elif scraper_type.lower() == 'ashby':
+                jobs = self._scrape_ashby(careers_url)
             elif scraper_type.lower() == 'lever':
                 # TODO: Implement Lever parser (Phase 2 - Future)
                 self.logger.warning(f"jobhunter-service: Lever parser not implemented yet, falling back to generic")

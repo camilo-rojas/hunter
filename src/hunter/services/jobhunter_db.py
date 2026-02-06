@@ -301,9 +301,34 @@ class JobHunterDatabaseManager:
 
     def add_company(self, name: str, careers_url: str, scraper_type: str = 'generic',
                    notes: str = '', created_by: str = 'system') -> int:
-        """Add a new company to scrape."""
-        try:
-            with self._get_connection() as conn:
+        """Add a new company to scrape, or reactivate if previously removed."""
+        with self._get_connection() as conn:
+            # First check if company exists (active or inactive)
+            cursor = conn.execute("""
+                SELECT id, active FROM companies WHERE name = ?
+            """, (name,))
+            existing = cursor.fetchone()
+
+            if existing:
+                company_id = existing['id']
+                is_active = existing['active']
+
+                if is_active:
+                    # Company exists and is active - error
+                    self.logger.warning(f"Company already exists and is active: {name}")
+                    raise ValueError(f"Company '{name}' already exists")
+                else:
+                    # Company exists but inactive - reactivate with updated info
+                    conn.execute("""
+                        UPDATE companies
+                        SET active = 1, careers_url = ?, scraper_type = ?,
+                            notes = ?, created_by = ?
+                        WHERE id = ?
+                    """, (careers_url, scraper_type, notes, created_by, company_id))
+                    self.logger.info(f"Reactivated company: {name} (ID: {company_id})")
+                    return company_id
+            else:
+                # New company - insert
                 cursor = conn.execute("""
                     INSERT INTO companies (name, careers_url, scraper_type, notes,
                                          added_date, created_by)
@@ -314,10 +339,6 @@ class JobHunterDatabaseManager:
                 company_id = cursor.lastrowid
                 self.logger.info(f"Added company: {name} (ID: {company_id})")
                 return company_id
-
-        except sqlite3.IntegrityError:
-            self.logger.warning(f"Company already exists: {name}")
-            raise ValueError(f"Company '{name}' already exists")
 
     def get_active_companies(self) -> List[Dict[str, Any]]:
         """Get all active companies."""
