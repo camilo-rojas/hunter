@@ -19,7 +19,7 @@ import logging
 import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
@@ -241,11 +241,59 @@ class JobHunterDatabaseManager:
                     ON criterion_group_values(group_id)
                 """)
 
+                # Table 10: AI Analysis Log (Phase 11 - cost tracking)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS ai_analysis_log (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        job_id INTEGER NOT NULL,
+                        analysis_date TEXT NOT NULL,
+                        tokens_input INTEGER,
+                        tokens_output INTEGER,
+                        cost_estimate REAL,
+                        model_used TEXT,
+                        created_date TEXT DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (job_id) REFERENCES job_postings(id) ON DELETE CASCADE
+                    )
+                """)
+
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_ai_analysis_log_job_id
+                    ON ai_analysis_log(job_id)
+                """)
+
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_ai_analysis_log_analysis_date
+                    ON ai_analysis_log(analysis_date)
+                """)
+
+                # Schema upgrades for Phase 11: Add AI analysis columns to job_matches
+                # Use try/except since SQLite doesn't support IF NOT EXISTS for ALTER TABLE
+                self._add_column_if_not_exists(conn, 'job_matches', 'ai_score', 'REAL')
+                self._add_column_if_not_exists(conn, 'job_matches', 'ai_reasoning', 'TEXT')
+                self._add_column_if_not_exists(conn, 'job_matches', 'ai_recommendation', 'TEXT')
+                self._add_column_if_not_exists(conn, 'job_matches', 'ai_analyzed_date', 'TEXT')
+
+                # Add analysis_type column to ai_analysis_log for distinguishing summary vs job analysis
+                self._add_column_if_not_exists(conn, 'ai_analysis_log', 'analysis_type', 'TEXT DEFAULT "job"')
+
                 self.logger.info("Database schema initialized successfully")
 
         except Exception as e:
             self.logger.error(f"Failed to initialize database: {e}")
             raise
+
+    def _add_column_if_not_exists(self, conn, table: str, column: str, datatype: str):
+        """Helper method to add a column only if it doesn't exist."""
+        try:
+            # Try to add the column
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {datatype}")
+            self.logger.info(f"Added column {column} to table {table}")
+        except sqlite3.OperationalError as e:
+            # Column already exists - this is expected on upgrades
+            if "duplicate column name" in str(e).lower():
+                self.logger.debug(f"Column {column} already exists in table {table}")
+            else:
+                raise
 
     # ============================================================================
     # Company Management
@@ -361,7 +409,7 @@ class JobHunterDatabaseManager:
 
     def update_job_details(self, job_id: int, description: str = None,
                           salary_text: str = None, salary_min: float = None,
-                          salary_max: float = None) -> bool:
+                          salary_max: float = None, posted_date: str = None) -> bool:
         """
         Update job posting with full details from deep scrape.
 
@@ -371,6 +419,7 @@ class JobHunterDatabaseManager:
             salary_text: Raw salary text extracted (optional)
             salary_min: Minimum salary if extracted (optional)
             salary_max: Maximum salary if extracted (optional)
+            posted_date: When job was posted (optional)
 
         Returns:
             True if successful
@@ -381,9 +430,10 @@ class JobHunterDatabaseManager:
                 SET description = COALESCE(?, description),
                     salary_text = COALESCE(?, salary_text),
                     salary_min = COALESCE(?, salary_min),
-                    salary_max = COALESCE(?, salary_max)
+                    salary_max = COALESCE(?, salary_max),
+                    posted_date = COALESCE(?, posted_date)
                 WHERE id = ?
-            """, (description, salary_text, salary_min, salary_max, job_id))
+            """, (description, salary_text, salary_min, salary_max, posted_date, job_id))
             self.logger.debug(f"Updated job ID {job_id} with full details")
             return True
 
@@ -977,3 +1027,185 @@ class JobHunterDatabaseManager:
                 )
             except ValueError as e:
                 self.logger.warning(f"Skipping duplicate schedule: {e}")
+
+    # ==================== AI Analysis Methods (Phase 11) ====================
+
+    def update_job_match_ai_analysis(
+        self,
+        job_id: int,
+        ai_score: float,
+        ai_reasoning: str,
+        ai_recommendation: str
+    ):
+        """
+        Update job match record with AI analysis results.
+
+        Args:
+            job_id: Job posting ID
+            ai_score: AI-determined match score (0-100)
+            ai_reasoning: Detailed explanation from AI
+            ai_recommendation: APPLY | REVIEW | SKIP
+        """
+        with self._get_connection() as conn:
+            # Check if job_match exists, create if not
+            cursor = conn.execute(
+                "SELECT id FROM job_matches WHERE job_id = ?",
+                (job_id,)
+            )
+            result = cursor.fetchone()
+
+            if result:
+                # Update existing match
+                conn.execute("""
+                    UPDATE job_matches
+                    SET ai_score = ?,
+                        ai_reasoning = ?,
+                        ai_recommendation = ?,
+                        ai_analyzed_date = ?
+                    WHERE job_id = ?
+                """, (
+                    ai_score,
+                    ai_reasoning,
+                    ai_recommendation,
+                    datetime.now(timezone.utc).isoformat(),
+                    job_id
+                ))
+            else:
+                # Create new match record (for jobs that pass AI but not strict criteria)
+                conn.execute("""
+                    INSERT INTO job_matches (
+                        job_id, match_score, ai_score, ai_reasoning,
+                        ai_recommendation, ai_analyzed_date, notified_date
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    job_id,
+                    ai_score,  # Use AI score as match_score
+                    ai_score,
+                    ai_reasoning,
+                    ai_recommendation,
+                    datetime.now(timezone.utc).isoformat(),
+                    datetime.now(timezone.utc).isoformat()
+                ))
+
+    def record_ai_analysis(
+        self,
+        job_id: int,
+        tokens_input: int,
+        tokens_output: int,
+        model_used: str,
+        cost_estimate: float,
+        analysis_type: str = 'job'
+    ):
+        """
+        Record AI analysis for cost tracking.
+
+        Args:
+            job_id: Job posting ID
+            tokens_input: Input tokens used
+            tokens_output: Output tokens used
+            model_used: Model identifier (e.g., "claude-3-5-haiku-20241022")
+            cost_estimate: Estimated cost in USD
+            analysis_type: Type of analysis ('job' or 'summary')
+        """
+        with self._get_connection() as conn:
+            # Check if analysis_type column exists
+            cursor = conn.execute("PRAGMA table_info(ai_analysis_log)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'analysis_type' in columns:
+                conn.execute("""
+                    INSERT INTO ai_analysis_log (
+                        job_id, analysis_date, tokens_input, tokens_output,
+                        cost_estimate, model_used, analysis_type
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    job_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    tokens_input,
+                    tokens_output,
+                    cost_estimate,
+                    model_used,
+                    analysis_type
+                ))
+            else:
+                conn.execute("""
+                    INSERT INTO ai_analysis_log (
+                        job_id, analysis_date, tokens_input, tokens_output,
+                        cost_estimate, model_used
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    job_id,
+                    datetime.now(timezone.utc).isoformat(),
+                    tokens_input,
+                    tokens_output,
+                    cost_estimate,
+                    model_used
+                ))
+
+    def get_ai_stats(self, days: int = 30) -> Dict[str, Any]:
+        """
+        Get AI analysis cost statistics.
+
+        Args:
+            days: Number of days to look back
+
+        Returns:
+            Dictionary with stats: total_analyses, total_cost, total_tokens, etc.
+        """
+        cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT
+                    COUNT(*) as total_analyses,
+                    SUM(tokens_input) as total_input_tokens,
+                    SUM(tokens_output) as total_output_tokens,
+                    SUM(cost_estimate) as total_cost,
+                    AVG(cost_estimate) as avg_cost_per_job,
+                    MAX(analysis_date) as last_analysis_date
+                FROM ai_analysis_log
+                WHERE analysis_date >= ?
+            """, (cutoff_date,))
+
+            row = cursor.fetchone()
+
+            return {
+                'total_analyses': row['total_analyses'] or 0,
+                'total_input_tokens': row['total_input_tokens'] or 0,
+                'total_output_tokens': row['total_output_tokens'] or 0,
+                'total_tokens': (row['total_input_tokens'] or 0) + (row['total_output_tokens'] or 0),
+                'total_cost': row['total_cost'] or 0.0,
+                'avg_cost_per_job': row['avg_cost_per_job'] or 0.0,
+                'last_analysis_date': row['last_analysis_date'],
+                'period_days': days
+            }
+
+    def get_ai_approved_jobs(self, min_score: int = 90, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Get jobs that passed AI analysis with high scores.
+
+        Args:
+            min_score: Minimum AI score threshold
+            limit: Maximum number of jobs to return
+
+        Returns:
+            List of job dictionaries with AI analysis results
+        """
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT
+                    p.*,
+                    c.name as company_name,
+                    m.ai_score,
+                    m.ai_reasoning,
+                    m.ai_recommendation,
+                    m.ai_analyzed_date
+                FROM job_postings p
+                JOIN companies c ON p.company_id = c.id
+                JOIN job_matches m ON p.id = m.job_id
+                WHERE m.ai_score >= ?
+                ORDER BY m.ai_score DESC, p.first_seen_date DESC
+                LIMIT ?
+            """, (min_score, limit))
+
+            return [dict(row) for row in cursor.fetchall()]

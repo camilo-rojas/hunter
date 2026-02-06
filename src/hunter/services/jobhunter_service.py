@@ -42,10 +42,14 @@ import pytz
 from typing import Dict, Any, Optional, List, Tuple, Optional as Opt
 from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
+from pathlib import Path
+
+from anthropic import Anthropic
 
 from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
 from robotray.core.messaging import SecureMessage, MessagePriority
+from robotray.core.secrets_manager import SecretsManager
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +87,71 @@ class JobHunterService(BaseService):
 
         # Logging verbosity (default: false for concise executive summary)
         self.verbose_logging = self.config.get('verbose_logging', False)
+
+        # AI Analysis Configuration (Phase 11)
+        ai_config = self.config.get('ai_analysis', {})
+        self.ai_enabled = ai_config.get('enabled', False)
+        self.ai_model = ai_config.get('model', 'claude-3-5-haiku-20241022')
+        self.ai_summary_model = ai_config.get('summary_model', 'claude-sonnet-4-20250514')  # Sonnet for final summary
+        self.ai_max_tokens = ai_config.get('max_tokens', 1000)
+        self.ai_summary_max_tokens = ai_config.get('summary_max_tokens', 2000)  # More tokens for summary
+        self.ai_temperature = ai_config.get('temperature', 0.3)
+        self.ai_prescreen_threshold = ai_config.get('prescreen_threshold', 70)  # Pre-filter by criteria score
+        self.ai_min_score = ai_config.get('min_score_threshold', 90)
+        self.ai_cost_limit_daily = ai_config.get('cost_limit_daily', 5.00)
+        self.cv_path = Path(ai_config.get('cv_path', 'data/cv/resume.md'))
+        self.ai_prompt_template = ai_config.get('prompt_template', None)  # User-customizable job analysis prompt
+        self.ai_summary_prompt_template = ai_config.get('summary_prompt_template', None)  # User-customizable summary prompt
+
+        # Initialize AI client if enabled
+        self.anthropic_client: Optional[Anthropic] = None
+        self._cv_content: Optional[str] = None
+
+        # Notification preferences
+        self.send_individual_notifications = self.config.get('send_individual_notifications', False)
+
+        if self.ai_enabled:
+            try:
+                # Get API key from SecretsManager (same as ai-service)
+                self.secrets_manager = SecretsManager()
+                api_key = self.secrets_manager.get_secret("anthropic_api_key")
+
+                if not api_key:
+                    # Fallback to environment variable
+                    api_key = os.getenv("ANTHROPIC_API_KEY")
+                    self.logger.warning(
+                        "jobhunter-service: API key not found in SecretsManager, using environment variable"
+                    )
+
+                if api_key:
+                    self.anthropic_client = Anthropic(api_key=api_key)
+                    self.logger.info(
+                        f"jobhunter-service: AI analysis enabled with model {self.ai_model}, "
+                        f"min score threshold: {self.ai_min_score}"
+                    )
+
+                    # Load CV content (cached in memory)
+                    if self.cv_path.exists():
+                        self._cv_content = self.cv_path.read_text()
+                        self.logger.info(
+                            f"jobhunter-service: CV loaded from {self.cv_path} "
+                            f"({len(self._cv_content)} characters)"
+                        )
+                    else:
+                        self.logger.warning(
+                            f"jobhunter-service: CV not found at {self.cv_path}, "
+                            "AI analysis will work without CV context"
+                        )
+                else:
+                    self.logger.error(
+                        "jobhunter-service: AI analysis enabled but no API key found. "
+                        "Set via SecretsManager.set_secret('anthropic_api_key', 'sk-ant-...')"
+                    )
+                    self.ai_enabled = False
+
+            except Exception as e:
+                self.logger.error(f"jobhunter-service: Failed to initialize AI client: {e}")
+                self.ai_enabled = False
 
         # Initialize database manager (will be initialized during start_service)
         self.db_manager: Optional[JobHunterDatabaseManager] = None
@@ -513,6 +582,13 @@ class JobHunterService(BaseService):
                 self._handle_list_new_jobs(sender, correlation_id)
             elif command == "list-stale-jobs":
                 self._handle_list_stale_jobs(sender, args, correlation_id)
+            # AI Analysis Commands (Phase 11)
+            elif command == "analyze-job":
+                self._handle_analyze_job(sender, args, correlation_id)
+            elif command == "ai-stats":
+                self._handle_ai_stats(sender, args, correlation_id)
+            elif command == "list-ai-approved":
+                self._handle_list_ai_approved(sender, args, correlation_id)
             else:
                 self._send_error_response(
                     sender,
@@ -604,23 +680,54 @@ Automatically scrape company career pages, intelligently filter positions based 
 **Automated Workflow (Phase 6 ✅):**
 • `run-now` - Manually trigger complete workflow
   Example: @jobhunter-service run-now
-  Workflow: scrape all companies → score jobs → deep-match top results
+  Workflow: scrape all companies → score jobs → deep-match top results → AI analysis (if enabled)
   Note: Runs automatically on schedule, or trigger manually anytime
 
-**🚧 COMING SOON (Phases 7-11)**
-
-**Authentication (Phase 4.5):**
-• `set-credentials <company_id> <username> <password>` - For login-protected pages
-
-**Schedule Management (Phase 7):**
+**Schedule Management (Phase 7 ✅):**
 • `add-schedule <time> [timezone]` - Add daily scrape time (HH:MM)
-• `list-schedules` - Show all scheduled run times
-• `remove-schedule <id>` - Remove a schedule
+  Example: @jobhunter-service add-schedule "09:00" "America/New_York"
+• `list-schedules` - Show all scheduled run times with next run
+• `remove-schedule <id>` - Remove a schedule by ID
 
-**Job Management (Phase 8 & 9):**
-• `matches [limit]` - Show recent job matches
-• `list-new-jobs` - Show only NEW jobs (freshness detection)
-• `list-stale-jobs <days>` - Show jobs older than N days
+**Job Management (Phase 8 & 9 ✅):**
+• `list-new-jobs` - Show only NEW jobs (freshness detection with +15 bonus)
+• `list-stale-jobs [days]` - Show jobs older than N days (default: 14)
+  Example: @jobhunter-service list-stale-jobs 30
+
+**AI-Powered Analysis (Phase 11 ✅):**
+• `analyze-job <job_id>` - Analyze a specific job with AI (compares against CV + criteria)
+  Example: @jobhunter-service analyze-job 123
+  Returns: AI score (0-100), reasoning, recommendation (APPLY/REVIEW/SKIP)
+
+**💡 AI Analysis Overview:**
+  When AI is enabled (config: ai_analysis.enabled: true), the workflow uses a two-stage AI system:
+
+  **Stage 1: Cost-Optimized Filtering**
+  - Only analyzes jobs with criteria score >= 70 (saves ~60% on AI costs)
+  - Uses Claude Haiku for fast, cheap analysis (~$0.0017/job)
+  - Returns AI score, reasoning, fit summary, concerns, recommendation
+
+  **Stage 2: Professional Hiring Summary**
+  - Top 1-3 positions curated by Claude Sonnet (~$0.024/summary)
+  - Concise, Telegram-friendly format
+  - Includes notification history and freshness indicators
+  - One message per run with best opportunities
+
+  **Configuration (in jobhunter-service.yaml):**
+  - `prescreen_threshold: 70` - Only AI-analyze jobs with criteria score >= this
+  - `min_score_threshold: 60` - Only notify if AI score >= this
+  - `send_individual_notifications: false` - Send summary only (true = summary + individual)
+  - `cost_limit_daily: 5.00` - Daily budget limit
+  - `cv_path` - Path to your CV for comparison
+
+  **Typical Costs:**
+  - Per run: ~$0.044 (12 jobs × $0.0017 + $0.024 summary)
+  - 3 runs/day: ~$0.13/day = ~$4/month
+
+**🚧 COMING SOON (Phase 4.5)**
+
+**Authentication:**
+• `set-credentials <company_id> <username> <password>` - For login-protected pages
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -862,18 +969,51 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             health = self.health_check()
             companies = self.db_manager.get_active_companies()
             criteria = self.db_manager.get_active_criteria()
+            groups = self.db_manager.get_active_groups()
             schedules = self.db_manager.get_active_run_times()
+
+            # Total criteria = simple criteria + group criteria
+            total_criteria = len(criteria) + len(groups)
 
             response = f"**JobHunter Service Status**\n\n"
             response += f"🟢 Status: {health['status']}\n"
             response += f"📊 Active companies: {len(companies)}\n"
-            response += f"🎯 Active criteria: {len(criteria)}\n"
-            response += f"⏰ Scheduled runs: {len(schedules)}\n\n"
+            response += f"🎯 Active criteria: {total_criteria} ({len(criteria)} simple, {len(groups)} groups)\n"
+            response += f"⏰ Scheduled runs: {len(schedules)}\n"
+
+            # AI Analysis status
+            if self.ai_enabled:
+                response += f"🤖 AI analysis: enabled (notify score >= {self.ai_min_score})\n"
+                response += f"   Model: {self.ai_model}\n"
+                response += f"   💰 Cost filter: Only analyze jobs with criteria score >= {self.ai_prescreen_threshold}\n"
+                cv_status = "✅" if self._cv_content else "❌"
+                response += f"   CV loaded: {cv_status}\n"
+
+                # Show AI cost statistics
+                ai_stats = self.db_manager.get_ai_stats(days=30)  # Last 30 days
+                if ai_stats['total_analyses'] > 0:
+                    response += f"   📊 Last 30 days: {ai_stats['total_analyses']} analyses, "
+                    response += f"${ai_stats['total_cost']:.4f} total cost\n"
+                    response += f"   💰 Avg cost per job: ${ai_stats['avg_cost_per_job']:.4f}\n"
+                else:
+                    response += f"   📊 No AI analyses yet\n"
+            else:
+                response += f"🤖 AI analysis: disabled\n"
+
+            response += "\n"
 
             if schedules:
                 response += "**Upcoming Runs:**\n"
                 for schedule in schedules[:3]:
                     response += f"• {schedule['run_time']} {schedule['timezone']}\n"
+
+                # Calculate next run
+                next_run = self._calculate_next_run()
+                if next_run:
+                    import pytz
+                    ny_tz = pytz.timezone('America/New_York')
+                    next_run_ny = next_run.astimezone(ny_tz)
+                    response += f"\n⏰ **Next run:** {next_run_ny.strftime('%Y-%m-%d %H:%M:%S %Z')}\n"
             else:
                 response += "⚠️ No schedules configured. Use `add-schedule` to set up automated runs.\n"
 
@@ -1799,10 +1939,10 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
           run-now
         """
         try:
-            response = "**🚀 Manual Workflow Trigger**\n\n"
-            response += "Starting complete workflow: scrape → score → deep-match → notify\n"
-            response += "This may take several minutes depending on the number of companies...\n"
+            # Log at debug level - user already knows they triggered it
+            self.logger.debug("jobhunter-service: Manual workflow triggered by user")
 
+            response = "🚀 Starting job search workflow...\n"
             self._send_response(sender, response, correlation_id=correlation_id)
 
             # Run the workflow in the current thread (blocking)
@@ -2088,6 +2228,221 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self._send_error_response(sender, f"Failed to list stale jobs: {str(e)}", correlation_id=correlation_id)
 
     # ============================================================================
+    # AI Analysis Commands (Phase 11)
+    # ============================================================================
+
+    def _handle_analyze_job(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle analyze-job command - manually analyze a specific job with AI.
+
+        Usage:
+          analyze-job <job_id>
+          analyze-job 123
+        """
+        try:
+            if not self.ai_enabled:
+                self._send_error_response(
+                    sender,
+                    "❌ AI analysis is not enabled. Check configuration.",
+                    correlation_id=correlation_id
+                )
+                return
+
+            if not args or len(args) < 1:
+                self._send_error_response(
+                    sender,
+                    "❌ Usage: analyze-job <job_id>",
+                    correlation_id=correlation_id
+                )
+                return
+
+            job_id = int(args[0])
+
+            # Get job from database
+            job = self.db_manager.get_job_by_id(job_id)
+            if not job:
+                self._send_error_response(
+                    sender,
+                    f"❌ Job ID {job_id} not found",
+                    correlation_id=correlation_id
+                )
+                return
+
+            # Run AI analysis
+            self.logger.info(f"jobhunter-service: Running AI analysis on job {job_id}: {job.get('title')}")
+            ai_result = self._analyze_job_with_cv(job)
+
+            if not ai_result:
+                self._send_error_response(
+                    sender,
+                    f"❌ AI analysis failed for job {job_id}",
+                    correlation_id=correlation_id
+                )
+                return
+
+            # Save results
+            self.db_manager.update_job_match_ai_analysis(
+                job_id=job_id,
+                ai_score=ai_result['ai_score'],
+                ai_reasoning=ai_result['reasoning'],
+                ai_recommendation=ai_result['recommendation']
+            )
+
+            # Format response
+            response = f"🤖 **AI Job Analysis**\n\n"
+            response += f"**Job:** {job.get('title', 'Unknown')}\n"
+            response += f"**Company:** {job.get('company_name', 'Unknown')}\n"
+            response += f"**URL:** {job['url']}\n\n"
+            response += f"**AI Score:** {ai_result['ai_score']}/100\n"
+            response += f"**Recommendation:** {ai_result['recommendation']}\n\n"
+            response += f"**Analysis:**\n{ai_result['reasoning']}\n\n"
+            response += f"**Fit Summary:**\n{ai_result['fit_summary']}\n\n"
+
+            if ai_result.get('concerns'):
+                response += f"**Concerns:**\n"
+                for concern in ai_result['concerns']:
+                    response += f"  • {concern}\n"
+            else:
+                response += f"**No concerns identified**\n"
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except ValueError:
+            self._send_error_response(
+                sender,
+                "❌ Invalid job ID. Must be a number.",
+                correlation_id=correlation_id
+            )
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error analyzing job: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to analyze job: {str(e)}", correlation_id=correlation_id)
+
+    def _handle_ai_stats(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle ai-stats command - show AI analysis cost statistics.
+
+        Usage:
+          ai-stats [days]
+          ai-stats 30
+        """
+        try:
+            if not self.ai_enabled:
+                self._send_error_response(
+                    sender,
+                    "❌ AI analysis is not enabled. Check configuration.",
+                    correlation_id=correlation_id
+                )
+                return
+
+            # Get period (default 30 days)
+            days = int(args[0]) if args and len(args) > 0 else 30
+
+            # Get stats from database
+            stats = self.db_manager.get_ai_stats(days=days)
+
+            # Format response
+            response = f"📊 **AI Analysis Statistics** (Last {days} days)\n\n"
+            response += f"**Usage:**\n"
+            response += f"  • Total analyses: {stats['total_analyses']}\n"
+            response += f"  • Total tokens: {stats['total_tokens']:,}\n"
+            response += f"  • Input tokens: {stats['total_input_tokens']:,}\n"
+            response += f"  • Output tokens: {stats['total_output_tokens']:,}\n\n"
+
+            response += f"**Cost:**\n"
+            response += f"  • Total cost: ${stats['total_cost']:.4f}\n"
+            response += f"  • Avg cost/job: ${stats['avg_cost_per_job']:.4f}\n"
+            response += f"  • Daily limit: ${self.ai_cost_limit_daily:.2f}\n\n"
+
+            if stats['last_analysis_date']:
+                response += f"**Last Analysis:** {stats['last_analysis_date']}\n\n"
+
+            response += f"**Model:** {self.ai_model}\n"
+            response += f"**Min Score Threshold:** {self.ai_min_score}\n"
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except ValueError:
+            self._send_error_response(
+                sender,
+                "❌ Invalid days parameter. Must be a number.",
+                correlation_id=correlation_id
+            )
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error getting AI stats: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to get AI stats: {str(e)}", correlation_id=correlation_id)
+
+    def _handle_list_ai_approved(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle list-ai-approved command - show jobs approved by AI analysis.
+
+        Usage:
+          list-ai-approved [limit]
+          list-ai-approved 10
+        """
+        try:
+            if not self.ai_enabled:
+                self._send_error_response(
+                    sender,
+                    "❌ AI analysis is not enabled. Check configuration.",
+                    correlation_id=correlation_id
+                )
+                return
+
+            # Get limit (default 20)
+            limit = int(args[0]) if args and len(args) > 0 else 20
+
+            # Get AI-approved jobs from database
+            jobs = self.db_manager.get_ai_approved_jobs(
+                min_score=self.ai_min_score,
+                limit=limit
+            )
+
+            if not jobs:
+                response = f"🤖 **AI-Approved Jobs**\n\n"
+                response += f"No jobs with AI score >= {self.ai_min_score} found.\n"
+                response += f"Run 'run-now' to trigger a scrape with AI analysis."
+            else:
+                response = f"🤖 **AI-Approved Jobs** ({len(jobs)} found)\n\n"
+                response += f"Jobs with AI score >= {self.ai_min_score}:\n\n"
+
+                for job in jobs[:20]:
+                    response += f"**{int(job['ai_score'])}/100** - {job['title']}\n"
+                    response += f"   🏢 {job['company_name']}\n"
+                    response += f"   📍 {job.get('location', 'Location not specified')}\n"
+                    response += f"   💡 {job['ai_recommendation']}\n"
+                    response += f"   🔗 {job['url']}\n"
+
+                    # Add reasoning snippet
+                    reasoning = job.get('ai_reasoning', '')
+                    if reasoning and len(reasoning) > 150:
+                        reasoning = reasoning[:147] + "..."
+                    if reasoning:
+                        response += f"   📝 {reasoning}\n"
+
+                    response += "\n"
+
+                if len(jobs) > 20:
+                    response += f"... and {len(jobs) - 20} more\n"
+
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except ValueError:
+            self._send_error_response(
+                sender,
+                "❌ Invalid limit parameter. Must be a number.",
+                correlation_id=correlation_id
+            )
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error listing AI-approved jobs: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(sender, f"Failed to list AI-approved jobs: {str(e)}", correlation_id=correlation_id)
+
+    # ============================================================================
     # Web Scraping (Phase 4)
     # ============================================================================
 
@@ -2354,6 +2709,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
         """
         Follow job URL to scrape full details (Phase 5.5).
 
+        For Greenhouse jobs, uses the API. For others, parses HTML.
+
         Args:
             job_id: Database ID of job to update
             job_url: URL to scrape
@@ -2362,7 +2719,11 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             True if successful, False otherwise
         """
         try:
-            # Fetch job detail page with politeness delay
+            # Check if this is a Greenhouse job
+            if 'greenhouse.io' in job_url:
+                return self._deep_scrape_greenhouse_job(job_id, job_url)
+
+            # Fetch job detail page with politeness delay (non-Greenhouse)
             if self.verbose_logging:
                 self.logger.info(f"jobhunter-service: Deep scraping job {job_id}: {job_url}")
             html = self._fetch_with_retry(job_url, politeness_delay=2.0)
@@ -2440,6 +2801,103 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self.logger.error(f"jobhunter-service: Error deep scraping job {job_id}: {e}")
             return False
 
+    def _deep_scrape_greenhouse_job(self, job_id: int, job_url: str) -> bool:
+        """
+        Deep scrape a Greenhouse job using their API.
+
+        Args:
+            job_id: Database ID of job to update
+            job_url: Greenhouse job URL (e.g., https://job-boards.greenhouse.io/anthropic/jobs/5101832008)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import requests
+            import re
+            from urllib.parse import urlparse
+
+            # Extract company slug and job ID from URL
+            # URL format: https://job-boards.greenhouse.io/{company}/jobs/{job_id}
+            path_parts = urlparse(job_url).path.strip('/').split('/')
+            if len(path_parts) >= 3 and 'jobs' in path_parts:
+                jobs_index = path_parts.index('jobs')
+                company_slug = path_parts[jobs_index - 1]
+                greenhouse_job_id = path_parts[jobs_index + 1]
+
+                # Call Greenhouse API for individual job
+                api_url = f"https://boards-api.greenhouse.io/v1/boards/{company_slug}/jobs/{greenhouse_job_id}"
+
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service: Fetching Greenhouse job details from API: {api_url}")
+
+                headers = {
+                    'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                    'Accept': 'application/json'
+                }
+                response = requests.get(api_url, headers=headers, timeout=30)
+
+                if response.status_code == 200:
+                    job_data = response.json()
+
+                    # Extract description (content field)
+                    description = job_data.get('content', '')
+
+                    # Extract posted date (first_published field)
+                    posted_date = job_data.get('first_published', None)
+
+                    # Extract salary if present in description
+                    salary_text = None
+                    salary_min = None
+                    salary_max = None
+
+                    if description:
+                        # Look for salary patterns
+                        salary_patterns = [
+                            r'\$(\d{1,3}(?:,\d{3})*(?:k)?)\s*-\s*\$(\d{1,3}(?:,\d{3})*(?:k)?)',
+                            r'\$(\d{1,3}(?:,\d{3})*(?:k)?)\+',
+                        ]
+
+                        for pattern in salary_patterns:
+                            match = re.search(pattern, description, re.IGNORECASE)
+                            if match:
+                                salary_text = match.group(0)
+                                if '-' in salary_text:
+                                    salary_min = self._parse_salary(match.group(1))
+                                    salary_max = self._parse_salary(match.group(2))
+                                else:
+                                    salary_min = self._parse_salary(match.group(1))
+                                break
+
+                    # Update database
+                    if description:
+                        self.db_manager.update_job_details(
+                            job_id=job_id,
+                            description=description,
+                            salary_text=salary_text,
+                            salary_min=salary_min,
+                            salary_max=salary_max,
+                            posted_date=posted_date
+                        )
+                        if self.verbose_logging:
+                            self.logger.info(
+                                f"jobhunter-service: Greenhouse API returned {len(description)} chars for job {job_id}"
+                            )
+                        return True
+                    else:
+                        self.logger.warning(f"jobhunter-service: No content in Greenhouse API response for job {job_id}")
+                        return False
+                else:
+                    self.logger.warning(f"jobhunter-service: Greenhouse API returned {response.status_code} for job {job_id}")
+                    return False
+            else:
+                self.logger.warning(f"jobhunter-service: Could not parse Greenhouse URL: {job_url}")
+                return False
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error deep scraping Greenhouse job {job_id}: {e}")
+            return False
+
     def _deep_scrape_matches(self, matched_jobs: List[Dict[str, Any]]) -> int:
         """
         Deep scrape a list of matched jobs to get full details (Phase 5.5).
@@ -2474,15 +2932,18 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
 
     def _scrape_greenhouse(self, careers_url: str) -> List[Dict[str, Any]]:
         """
-        Scrape jobs from a Greenhouse job board using their embedded JSON data.
+        Scrape jobs from a Greenhouse job board using their API.
 
-        Greenhouse boards expose job data in multiple formats:
-        1. Embedded JSON in <script> tags (most reliable)
-        2. Structured HTML with data attributes
-        3. JSON API endpoint (may require authentication)
+        Modern Greenhouse boards use client-side JavaScript to load jobs from their API.
+        This method tries multiple approaches:
+        1. Direct API call (boards-api.greenhouse.io) - most reliable
+        2. Embedded JSON in HTML <script> tags (older boards)
+        3. Structured HTML parsing (fallback)
 
         Args:
-            careers_url: URL of Greenhouse job board (e.g., https://job-boards.greenhouse.io/anthropic/jobs)
+            careers_url: URL of Greenhouse job board
+                        (e.g., https://www.anthropic.com/careers/jobs OR
+                               https://job-boards.greenhouse.io/anthropic/jobs)
 
         Returns:
             List of job dictionaries with keys: title, url, location, description
@@ -2490,22 +2951,92 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
         try:
             import json
             import re
+            import requests
+            from urllib.parse import urlparse
 
             if self.verbose_logging:
                 self.logger.info(f"jobhunter-service: Using Greenhouse parser for {careers_url}")
 
-            # Fetch the job board page
+            # Extract company slug from URL
+            # Examples:
+            # - https://www.anthropic.com/careers/jobs -> "anthropic"
+            # - https://job-boards.greenhouse.io/anthropic/jobs -> "anthropic"
+            # - https://boards.greenhouse.io/anthropic -> "anthropic"
+            company_slug = None
+            parsed = urlparse(careers_url)
+            domain = parsed.netloc
+            path_parts = parsed.path.strip('/').split('/')
+
+            # Strategy 1: If URL contains greenhouse.io, extract from path
+            if 'greenhouse.io' in domain:
+                # Path like: /anthropic/jobs or /anthropic
+                if path_parts and path_parts[0] and path_parts[0] not in ['careers', 'jobs']:
+                    company_slug = path_parts[0]
+
+            # Strategy 2: Extract from domain (e.g., www.anthropic.com -> anthropic)
+            if not company_slug:
+                domain_parts = domain.split('.')
+                # Remove common prefixes (www, jobs, careers, etc.)
+                if len(domain_parts) >= 2:
+                    # Get the second-to-last part (e.g., anthropic from www.anthropic.com)
+                    # or first part if no subdomain
+                    if domain_parts[0] in ['www', 'jobs', 'careers', 'apply']:
+                        company_slug = domain_parts[1] if len(domain_parts) > 1 else domain_parts[0]
+                    else:
+                        company_slug = domain_parts[0]
+
+            jobs = []
+
+            # Method 1: Try Greenhouse API directly (most reliable for modern boards)
+            if company_slug:
+                api_url = f"https://boards-api.greenhouse.io/v1/boards/{company_slug}/jobs"
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service: Trying Greenhouse API: {api_url}")
+
+                try:
+                    headers = {
+                        'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                        'Accept': 'application/json'
+                    }
+                    response = requests.get(api_url, headers=headers, timeout=30)
+
+                    if response.status_code == 200:
+                        data = response.json()
+                        if 'jobs' in data:
+                            for job_data in data['jobs']:
+                                location_name = ''
+                                if isinstance(job_data.get('location'), dict):
+                                    location_name = job_data['location'].get('name', '')
+                                elif isinstance(job_data.get('location'), str):
+                                    location_name = job_data['location']
+
+                                jobs.append({
+                                    'title': job_data.get('title', 'Unknown'),
+                                    'url': job_data.get('absolute_url', ''),
+                                    'location': location_name,
+                                    'description': job_data.get('content', '')
+                                })
+
+                            if self.verbose_logging:
+                                self.logger.info(f"jobhunter-service: Greenhouse API returned {len(jobs)} jobs")
+
+                            return jobs
+                    else:
+                        self.logger.debug(f"jobhunter-service: Greenhouse API returned {response.status_code}, trying HTML fallback")
+
+                except Exception as e:
+                    self.logger.debug(f"jobhunter-service: Greenhouse API failed: {e}, trying HTML fallback")
+
+            # Method 2: Fetch HTML and look for embedded JSON (older boards)
             html = self._fetch_with_retry(careers_url, politeness_delay=2.0)
             if not html:
                 if self.verbose_logging:
-                    self.logger.warning(f"jobhunter-service: Failed to fetch Greenhouse board")
+                    self.logger.warning(f"jobhunter-service: Failed to fetch Greenhouse board HTML")
                 return []
 
             soup = BeautifulSoup(html, 'lxml')
-            jobs = []
 
-            # Method 1: Look for embedded JSON data (most reliable)
-            # Greenhouse often embeds job data in <script> tags
+            # Look for embedded JSON data in <script> tags
             script_tags = soup.find_all('script', type='application/json')
             for script in script_tags:
                 try:
@@ -2521,6 +3052,11 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 except (json.JSONDecodeError, KeyError, TypeError) as e:
                     self.logger.debug(f"jobhunter-service: Skipping script tag (not job data): {e}")
                     continue
+
+            if jobs:
+                if self.verbose_logging:
+                    self.logger.info(f"jobhunter-service: Found {len(jobs)} jobs from embedded JSON")
+                return jobs
 
             # Method 2: Parse structured HTML (fallback)
             if not jobs:
@@ -2797,6 +3333,442 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
         except (ValueError, AttributeError):
             return 0  # Parse error, no adjustment
 
+    # ============================================================================
+    # AI Analysis Methods (Phase 11)
+    # ============================================================================
+
+    def _analyze_job_with_cv(self, job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Analyze job using Claude API comparing against criteria and CV (Phase 11).
+
+        This method sends the job description, user criteria, and CV to Claude
+        for semantic analysis. Claude evaluates the overall fit and provides
+        a detailed explanation.
+
+        Args:
+            job: Job dictionary with description, title, location, etc.
+
+        Returns:
+            Dictionary with:
+                - ai_score: 0-100 score
+                - reasoning: Detailed explanation
+                - fit_summary: 2-3 sentence summary
+                - concerns: List of potential issues
+                - recommendation: "APPLY" | "REVIEW" | "SKIP"
+            Returns None if AI is disabled or analysis fails.
+        """
+        if not self.ai_enabled or not self.anthropic_client:
+            self.logger.warning(f"jobhunter-service: AI analysis skipped - enabled={self.ai_enabled}, client={self.anthropic_client is not None}")
+            return None
+
+        try:
+            # Get active criteria for context
+            criteria = self.db_manager.get_active_criteria()
+            criteria_summary = self._format_criteria_for_ai(criteria)
+
+            # Build the prompt (use template from config if available)
+            if self.ai_prompt_template:
+                # Use user-customizable template from config
+                prompt = self.ai_prompt_template.format(
+                    cv_content=self._cv_content if self._cv_content else "[CV not provided]",
+                    criteria_summary=criteria_summary,
+                    job_title=job.get('title', 'Unknown'),
+                    job_company=job.get('company_name', 'Unknown'),
+                    job_location=job.get('location', 'Not specified'),
+                    job_url=job['url'],
+                    job_description=job.get('description', 'No description available')
+                )
+            else:
+                # Fallback to default prompt
+                prompt = f"""You are an expert job matching assistant. Analyze this job opportunity.
+
+USER PROFILE (CV):
+{self._cv_content if self._cv_content else "[CV not provided]"}
+
+USER CRITERIA:
+{criteria_summary}
+
+JOB POSTING:
+Title: {job.get('title', 'Unknown')}
+Company: {job.get('company_name', 'Unknown')}
+Location: {job.get('location', 'Not specified')}
+URL: {job['url']}
+
+Description:
+{job.get('description', 'No description available')}
+
+TASK:
+Evaluate this job against the user's profile and criteria. Be SELECTIVE - only score 90+ for truly excellent matches where the user's experience, skills, and preferences align very well.
+
+Provide:
+1. Overall fit score (0-100) - Be selective, 90+ means excellent match
+2. Detailed reasoning explaining the score (2-3 sentences)
+3. Summary of fit (1-2 sentences)
+4. Any concerns or red flags (list, can be empty)
+5. Recommendation:
+   - APPLY (90+): Excellent match, strong alignment
+   - REVIEW (70-89): Good match but needs review
+   - SKIP (<70): Not a good fit
+
+Respond in JSON format:
+{{
+    "ai_score": <0-100>,
+    "reasoning": "<detailed analysis in 2-3 sentences>",
+    "fit_summary": "<1-2 sentences>",
+    "concerns": ["<concern1>", "<concern2>"],
+    "recommendation": "APPLY|REVIEW|SKIP"
+}}"""
+
+            # Call Claude API
+            self.logger.debug(f"jobhunter-service: Calling Claude API for job {job.get('id', 'unknown')}...")
+            response = self.anthropic_client.messages.create(
+                model=self.ai_model,
+                max_tokens=self.ai_max_tokens,
+                temperature=self.ai_temperature,
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            # Parse response (handle markdown-wrapped JSON)
+            self.logger.debug(f"jobhunter-service: Got response, extracting text...")
+            result_text = response.content[0].text
+
+            # Log raw response for debugging
+            self.logger.debug(f"jobhunter-service: Raw AI response (first 500 chars): {result_text[:500]}")
+
+            # Strip markdown code blocks if present
+            if '```' in result_text:
+                # Extract JSON from code block
+                import re
+                json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', result_text, re.DOTALL)
+                if json_match:
+                    result_text = json_match.group(1)
+                    self.logger.debug(f"jobhunter-service: Extracted JSON from markdown: {result_text[:300]}")
+                else:
+                    self.logger.warning(f"jobhunter-service: Found ``` but couldn't extract JSON, trying full text")
+
+            # Try to parse JSON
+            result_text = result_text.strip()
+            if not result_text:
+                raise ValueError("Empty response from AI")
+
+            # Extract only the JSON object (handle extra text after JSON)
+            # Find the first { and last } to extract just the JSON portion
+            first_brace = result_text.find('{')
+            if first_brace == -1:
+                raise ValueError("No JSON object found in response")
+
+            # Find matching closing brace
+            brace_count = 0
+            last_brace = -1
+            for i in range(first_brace, len(result_text)):
+                if result_text[i] == '{':
+                    brace_count += 1
+                elif result_text[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        last_brace = i
+                        break
+
+            if last_brace == -1:
+                raise ValueError("Unmatched braces in JSON response")
+
+            json_only = result_text[first_brace:last_brace + 1]
+            result = json.loads(json_only)
+
+            # Calculate cost
+            input_tokens = response.usage.input_tokens
+            output_tokens = response.usage.output_tokens
+            cost = self._calculate_ai_cost(input_tokens, output_tokens)
+
+            # Record usage for cost tracking
+            self.db_manager.record_ai_analysis(
+                job_id=job['id'],
+                tokens_input=input_tokens,
+                tokens_output=output_tokens,
+                model_used=self.ai_model,
+                cost_estimate=cost
+            )
+
+            self.logger.debug(
+                f"jobhunter-service: AI analysis complete for job {job['id']}: "
+                f"score={result['ai_score']}, recommendation={result['recommendation']}, "
+                f"cost=${cost:.4f}"
+            )
+
+            return result
+
+        except json.JSONDecodeError as e:
+            self.logger.error(f"jobhunter-service: Failed to parse AI response as JSON: {e}")
+            self.logger.error(f"jobhunter-service: Raw response (first 1000 chars): {result_text[:1000] if 'result_text' in locals() else 'N/A'}")
+            return None
+        except (KeyError, ValueError) as e:
+            self.logger.error(f"jobhunter-service: AI response error: {type(e).__name__}: {e}")
+            self.logger.error(f"jobhunter-service: Error repr: {repr(e)}")
+            if 'result' in locals():
+                self.logger.error(f"jobhunter-service: Response keys: {list(result.keys())}")
+                self.logger.error(f"jobhunter-service: Response content: {result}")
+            elif 'result_text' in locals():
+                self.logger.error(f"jobhunter-service: Raw response (first 1000 chars): {result_text[:1000]}")
+            else:
+                self.logger.error(f"jobhunter-service: No result_text available - error before API call?")
+            import traceback
+            self.logger.error(f"jobhunter-service: Traceback:\n{traceback.format_exc()}")
+            return None
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: AI analysis failed: {type(e).__name__}: {e}")
+            import traceback
+            self.logger.error(f"jobhunter-service: Traceback:\n{traceback.format_exc()}")
+            return None
+
+    def _format_criteria_for_ai(self, criteria: List[Dict[str, Any]]) -> str:
+        """
+        Format active criteria into a readable string for AI prompt.
+
+        Args:
+            criteria: List of criterion dictionaries
+
+        Returns:
+            Formatted string describing user criteria
+        """
+        if not criteria:
+            return "No specific criteria defined"
+
+        lines = []
+        for criterion in criteria:
+            ctype = criterion['criterion_type']
+            value = criterion['criterion_value']
+            weight = criterion['weight']
+            lines.append(f"- {ctype}: {value} (importance: {weight}/100)")
+
+        return "\n".join(lines)
+
+    def _calculate_ai_cost(self, input_tokens: int, output_tokens: int, model: str = None) -> float:
+        """
+        Calculate cost of AI API call.
+
+        Pricing (as of 2025):
+        - claude-3-5-haiku-20241022: Input $0.25/1M, Output $1.25/1M
+        - claude-sonnet-4-20250514: Input $3/1M, Output $15/1M
+
+        Args:
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+            model: Model name (defaults to self.ai_model)
+
+        Returns:
+            Cost in USD
+        """
+        if model is None:
+            model = self.ai_model
+
+        # Determine pricing based on model
+        if 'haiku' in model.lower():
+            input_cost_per_million = 0.25
+            output_cost_per_million = 1.25
+        elif 'sonnet' in model.lower():
+            input_cost_per_million = 3.0
+            output_cost_per_million = 15.0
+        elif 'opus' in model.lower():
+            input_cost_per_million = 15.0
+            output_cost_per_million = 75.0
+        else:
+            # Default to Haiku pricing
+            input_cost_per_million = 0.25
+            output_cost_per_million = 1.25
+
+        input_cost = (input_tokens / 1_000_000) * input_cost_per_million
+        output_cost = (output_tokens / 1_000_000) * output_cost_per_million
+
+        return input_cost + output_cost
+
+    def _generate_hiring_summary(self, approved_jobs: List[Dict[str, Any]]) -> Optional[str]:
+        """
+        Generate a professional hiring assistant summary using Claude Sonnet.
+
+        Takes all AI-approved jobs and creates a curated, concise summary
+        picking the top 1-3 (max 5) positions with detailed reasoning.
+
+        Args:
+            approved_jobs: List of job match dicts with AI analysis results
+
+        Returns:
+            Formatted message string, or None if generation fails
+        """
+        if not self.ai_enabled or not self.anthropic_client or not approved_jobs:
+            return None
+
+        try:
+            # Get active criteria for context
+            criteria = self.db_manager.get_active_criteria()
+            criteria_summary = self._format_criteria_for_ai(criteria)
+
+            # Format all approved jobs for the summary prompt
+            jobs_data = []
+            for match in approved_jobs:
+                job = match['job']
+                ai_result = match.get('ai_result', {})
+
+                # Calculate notification status
+                notified_date = job.get('notified_date')
+                first_seen_date = job.get('first_seen_date')
+                notification_status = "NEW - Not previously sent"
+
+                if notified_date:
+                    from datetime import datetime
+                    try:
+                        notified_dt = datetime.fromisoformat(notified_date.replace('Z', '+00:00'))
+                        now = datetime.now(notified_dt.tzinfo) if notified_dt.tzinfo else datetime.now()
+                        days_since_notified = (now - notified_dt).days
+
+                        if days_since_notified == 0:
+                            notification_status = "SENT TODAY - Already notified earlier today"
+                        elif days_since_notified == 1:
+                            notification_status = "SENT YESTERDAY - Reminder"
+                        elif days_since_notified <= 3:
+                            notification_status = f"SENT {days_since_notified} DAYS AGO - Follow-up"
+                        else:
+                            notification_status = f"Previously sent {days_since_notified} days ago"
+                    except:
+                        notification_status = "Previously sent"
+
+                # Calculate job freshness
+                freshness_note = ""
+                if job.get('is_new', 0):
+                    freshness_note = "🔥 BRAND NEW - Just posted today!"
+                elif first_seen_date:
+                    try:
+                        seen_dt = datetime.fromisoformat(first_seen_date.replace('Z', '+00:00'))
+                        now = datetime.now(seen_dt.tzinfo) if seen_dt.tzinfo else datetime.now()
+                        days_old = (now - seen_dt).days
+
+                        if days_old <= 2:
+                            freshness_note = "⚡ FRESH - Posted within last 2 days"
+                        elif days_old <= 7:
+                            freshness_note = "Recent - Posted within last week"
+                        else:
+                            freshness_note = f"Posted {days_old} days ago"
+                    except:
+                        freshness_note = ""
+
+                job_info = {
+                    'title': job.get('title', 'Unknown'),
+                    'company': job.get('company_name', 'Unknown'),
+                    'location': job.get('location', 'Not specified'),
+                    'url': job.get('url', '#'),
+                    'ai_score': ai_result.get('ai_score', 0),
+                    'recommendation': ai_result.get('recommendation', 'REVIEW'),
+                    'reasoning': ai_result.get('reasoning', ''),
+                    'concerns': ai_result.get('concerns', []),
+                    'notification_status': notification_status,
+                    'freshness_note': freshness_note,
+                    'posted_date': job.get('posted_date', 'Unknown'),
+                    'description_preview': job.get('description', '')[:500] if job.get('description') else ''
+                }
+                jobs_data.append(job_info)
+
+            # Build the prompt for Sonnet
+            jobs_text = "\n\n".join([
+                f"**Job {i+1}:**\n"
+                f"- Title: {j['title']}\n"
+                f"- Company: {j['company']}\n"
+                f"- Location: {j['location']}\n"
+                f"- AI Score: {j['ai_score']}/100\n"
+                f"- Recommendation: {j['recommendation']}\n"
+                f"- Notification History: {j['notification_status']}\n"
+                f"- Freshness: {j['freshness_note']}\n"
+                f"- Posted: {j['posted_date']}\n"
+                f"- URL: {j['url']}\n"
+                f"- Initial Analysis: {j['reasoning']}\n"
+                f"- Concerns: {', '.join(j['concerns']) if j['concerns'] else 'None noted'}\n"
+                for i, j in enumerate(jobs_data)
+            ])
+
+            # Build the prompt (use template from config if available)
+            if self.ai_summary_prompt_template:
+                # Use user-customizable template from config
+                prompt = self.ai_summary_prompt_template.format(
+                    cv_content=self._cv_content if self._cv_content else "[CV not provided]",
+                    criteria_summary=criteria_summary,
+                    jobs_text=jobs_text,
+                    job_count=len(approved_jobs)
+                )
+            else:
+                # Fallback to default prompt
+                prompt = f"""You are a professional hiring assistant helping your client find their next career opportunity.
+
+YOUR CLIENT'S PROFILE:
+{self._cv_content if self._cv_content else "[CV not provided]"}
+
+THEIR JOB SEARCH CRITERIA:
+{criteria_summary}
+
+CANDIDATE POSITIONS (already pre-screened):
+{jobs_text}
+
+YOUR TASK:
+Review these {len(approved_jobs)} pre-approved positions and select the TOP 1-3 opportunities (maximum 5 only if they're all truly excellent). Write a professional, concise message to your client as their hiring assistant.
+
+IMPORTANT GUIDELINES:
+- Be selective: Pick only the BEST 1-3 positions (up to 5 if all are exceptional)
+- Write in a professional but warm tone (you're their trusted advisor)
+- For each selected position, explain:
+  * Why it's a strong fit against their criteria and experience
+  * **NOTIFICATION CONTEXT:** If previously sent, mention it (e.g., "I sent this yesterday - still worth considering because..."). If NEW/FRESH, emphasize time-sensitivity!
+  * Any urgency factors (🔥 brand new postings are TIME-SENSITIVE - act fast!)
+  * Potential concerns or gaps they should be aware of
+  * Include the direct application link
+- Be honest about concerns - they want your real assessment
+- Format with clear headers and bullet points
+- Include position links inline like: [Position Title](URL)
+- **CRITICAL:** Use the "Notification History" and "Freshness" fields to provide context about whether this is a reminder or a new opportunity
+
+START YOUR MESSAGE WITH:
+"Hi! I've reviewed today's opportunities and here are my top recommendations for you:"
+
+Then provide your curated selections with detailed analysis."""
+
+            # Call Claude Sonnet for the summary
+            self.logger.debug(f"jobhunter-service: Generating hiring summary with {self.ai_summary_model} for {len(approved_jobs)} jobs...")
+
+            response = self.anthropic_client.messages.create(
+                model=self.ai_summary_model,
+                max_tokens=self.ai_summary_max_tokens,
+                temperature=0.5,  # Slightly higher for more natural writing
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            summary_text = response.content[0].text
+
+            # Calculate cost
+            input_tokens = response.usage.input_tokens
+            output_tokens = response.usage.output_tokens
+            cost = self._calculate_ai_cost(input_tokens, output_tokens, model=self.ai_summary_model)
+
+            # Record the summary generation cost
+            # Use the first approved job's ID (summary analyzes multiple jobs)
+            first_job_id = approved_jobs[0]['job']['id'] if approved_jobs else 0
+            self.db_manager.record_ai_analysis(
+                job_id=first_job_id,
+                tokens_input=input_tokens,
+                tokens_output=output_tokens,
+                model_used=self.ai_summary_model,
+                cost_estimate=cost,
+                analysis_type='summary'
+            )
+
+            self.logger.info(
+                f"jobhunter-service: Hiring summary generated: "
+                f"{output_tokens} tokens, cost=${cost:.4f}"
+            )
+
+            return summary_text
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Failed to generate hiring summary: {type(e).__name__}: {e}")
+            import traceback
+            self.logger.error(f"jobhunter-service: Traceback:\n{traceback.format_exc()}")
+            return None
+
     def _extract_salary(self, text: str) -> tuple:
         """
         Extract salary information from job text.
@@ -2946,9 +3918,9 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
         """
         try:
             start_time = time.time()
-            self.logger.info("=" * 60)
-            self.logger.info("jobhunter-service: 🚀 Starting Daily Scrape Workflow")
-            self.logger.info("=" * 60)
+            self.logger.debug("=" * 60)
+            self.logger.debug("jobhunter-service: 🚀 Starting Daily Scrape Workflow")
+            self.logger.debug("=" * 60)
 
             # Step 1: Get active companies
             companies = self.db_manager.get_active_companies()
@@ -3032,6 +4004,7 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 self.logger.info(f"jobhunter-service:    ✅ {len(matched_jobs)} jobs scored >= {min_score}")
 
             # Step 4: Deep scrape top matches
+            deep_scraped_jobs = []
             if matched_jobs:
                 deep_scrape_limit = min(20, len(matched_jobs))  # Limit to top 20
                 if self.verbose_logging:
@@ -3041,8 +4014,102 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 if self.verbose_logging:
                     self.logger.info(f"jobhunter-service:    ✅ Successfully deep scraped {success_count}/{deep_scrape_limit} jobs")
 
-            # Step 5: Send notifications (Phase 9)
-            if matched_jobs:
+                # Get the deep-scraped jobs with full descriptions
+                for match in matched_jobs[:deep_scrape_limit]:
+                    job = self.db_manager.get_job_by_id(match['job']['id'])
+                    # Check if description was updated by deep scrape (description field)
+                    if job and job.get('description') and len(job.get('description', '')) > 100:
+                        match['job'] = job  # Update with full description
+                        deep_scraped_jobs.append(match)
+                    elif self.verbose_logging:
+                        self.logger.warning(f"jobhunter-service: Job {job['id']} has no full description after deep scrape")
+
+            # Step 5: AI Analysis (Phase 11)
+            ai_approved_jobs = []
+            if self.ai_enabled and deep_scraped_jobs:
+                # Pre-filter by criteria score to save AI costs
+                ai_candidates = [m for m in deep_scraped_jobs if m['score'] >= self.ai_prescreen_threshold]
+                skipped_count = len(deep_scraped_jobs) - len(ai_candidates)
+
+                if skipped_count > 0:
+                    self.logger.info(
+                        f"jobhunter-service: 💰 Skipped {skipped_count} jobs with criteria score < {self.ai_prescreen_threshold} "
+                        f"(saved ~${skipped_count * 0.0017:.4f} in AI costs)"
+                    )
+
+                if ai_candidates:
+                    self.logger.debug(f"jobhunter-service: 🤖 Running AI analysis on {len(ai_candidates)} high-scoring jobs (criteria >= {self.ai_prescreen_threshold})...")
+                else:
+                    self.logger.debug(f"jobhunter-service: ℹ️  No jobs met AI prescreen threshold ({self.ai_prescreen_threshold})")
+
+                ai_analysis_count = 0
+                for i, match in enumerate(ai_candidates, 1):
+                    job = match['job']
+
+                    if self.verbose_logging:
+                        self.logger.info(f"jobhunter-service:    Analyzing {i}/{len(ai_candidates)}: {job.get('title', 'Unknown')}")
+
+                    # Run AI analysis
+                    ai_result = self._analyze_job_with_cv(job)
+
+                    if ai_result:
+                        ai_analysis_count += 1
+
+                        # Save AI results to database
+                        self.db_manager.update_job_match_ai_analysis(
+                            job_id=job['id'],
+                            ai_score=ai_result['ai_score'],
+                            ai_reasoning=ai_result['reasoning'],
+                            ai_recommendation=ai_result['recommendation']
+                        )
+
+                        # Only approve jobs with score >= threshold
+                        if ai_result['ai_score'] >= self.ai_min_score:
+                            match['ai_result'] = ai_result
+                            ai_approved_jobs.append(match)
+
+                            if self.verbose_logging:
+                                self.logger.info(
+                                    f"jobhunter-service:       ✅ APPROVED: Score={ai_result['ai_score']}, "
+                                    f"Rec={ai_result['recommendation']}"
+                                )
+                        else:
+                            if self.verbose_logging:
+                                self.logger.info(
+                                    f"jobhunter-service:       ❌ FILTERED: Score={ai_result['ai_score']} "
+                                    f"(threshold={self.ai_min_score})"
+                                )
+
+                self.logger.info(
+                    f"jobhunter-service:    ✅ AI analysis complete: {ai_analysis_count} analyzed, "
+                    f"{len(ai_approved_jobs)} approved (score >= {self.ai_min_score})"
+                )
+
+            # Step 6: Send notifications (Phase 9)
+            # With AI enabled, generate a curated summary (NO individual notifications)
+            # Without AI, notify about all matched jobs (original behavior)
+            if self.ai_enabled and ai_approved_jobs:
+                # Generate professional hiring assistant summary
+                summary = self._generate_hiring_summary(ai_approved_jobs)
+
+                if summary:
+                    # Send one curated message with the summary
+                    self._send_response(
+                        "broadcast",
+                        f"**🎯 JobHunter: Today's Top Opportunities**\n\n{summary}",
+                        content_type="text/markdown"
+                    )
+                    self.logger.debug(f"jobhunter-service: Sent hiring summary for {len(ai_approved_jobs)} approved jobs")
+                else:
+                    # Summary generation failed - log error but don't spam with individual notifications
+                    self.logger.error("jobhunter-service: Summary generation failed - no notifications sent")
+                    self._send_response(
+                        "broadcast",
+                        f"⚠️ **JobHunter**: Found {len(ai_approved_jobs)} approved jobs but failed to generate summary. Check logs for details.",
+                        content_type="text/markdown"
+                    )
+            elif not self.ai_enabled and matched_jobs:
+                # AI disabled: send individual notifications for all matches
                 self._send_job_notifications(matched_jobs)
 
             # Summary
@@ -3053,7 +4120,17 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self.logger.info(f"jobhunter-service:    • Total jobs found: {total_jobs_scraped}")
             self.logger.info(f"jobhunter-service:    • New jobs: {total_new_jobs}")
             self.logger.info(f"jobhunter-service:    • High-scoring matches: {len(matched_jobs)}")
-            self.logger.info(f"jobhunter-service:    • Deep scraped: {deep_scrape_limit if matched_jobs else 0}")
+            self.logger.info(f"jobhunter-service:    • Deep scraped: {len(deep_scraped_jobs)}")
+
+            if self.ai_enabled:
+                self.logger.info(f"jobhunter-service:    • AI approved (>={self.ai_min_score}): {len(ai_approved_jobs)}")
+                if ai_approved_jobs:
+                    self.logger.info(f"jobhunter-service:    • Notification: Curated summary sent (1 message)")
+                else:
+                    self.logger.info(f"jobhunter-service:    • Notification: None (no approved jobs)")
+            else:
+                self.logger.info(f"jobhunter-service:    • Notifications sent: {len(matched_jobs)}")
+
             self.logger.info(f"jobhunter-service:    • Time elapsed: {elapsed/60:.1f} minutes")
             self.logger.info("=" * 60)
 

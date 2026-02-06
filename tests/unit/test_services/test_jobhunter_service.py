@@ -2591,3 +2591,390 @@ class TestPhase9_Notifications:
         # Should not send any notifications (no matches above threshold)
         assert not service._send_response.called or service._send_response.call_count == 0
 
+
+# =============================================================================
+# Phase 11: AI-Powered Job Analysis Tests
+# =============================================================================
+
+class TestAIAnalysis:
+    """Test AI-powered job analysis functionality (Phase 11)."""
+
+    @pytest.fixture
+    def temp_db(self):
+        """Create a temporary database for testing."""
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, f"test_jobhunter_ai_{os.getpid()}_{time.time()}.db")
+        yield temp_path
+        Path(temp_path).unlink(missing_ok=True)
+
+    @pytest.fixture
+    def db_manager(self, temp_db):
+        """Create database manager with temporary database."""
+        manager = JobHunterDatabaseManager(temp_db)
+        manager.initialize_database()
+        return manager
+
+    @pytest.fixture
+    def temp_cv(self):
+        """Create a temporary CV file for testing."""
+        temp_dir = tempfile.gettempdir()
+        cv_path = Path(temp_dir) / f"test_cv_{os.getpid()}.md"
+        cv_path.write_text("""
+# John Doe - Senior Software Engineer
+
+## Experience
+- 10+ years Python development
+- Expert in FastAPI, Django, Flask
+- AWS cloud architecture
+- Kubernetes and Docker
+
+## Skills
+- Backend: Python, Go, Node.js
+- Databases: PostgreSQL, MongoDB, Redis
+- Cloud: AWS, GCP
+- DevOps: Docker, Kubernetes, Terraform
+        """)
+        yield cv_path
+        cv_path.unlink(missing_ok=True)
+
+    @pytest.fixture
+    def ai_config(self, temp_cv):
+        """AI analysis configuration for testing."""
+        return {
+            'enabled': True,
+            'model': 'claude-3-5-haiku-20241022',
+            'summary_model': 'claude-sonnet-4-20250514',
+            'max_tokens': 1000,
+            'summary_max_tokens': 2000,
+            'temperature': 0.3,
+            'prescreen_threshold': 70,
+            'min_score_threshold': 60,
+            'cost_limit_daily': 5.00,
+            'cv_path': str(temp_cv)
+        }
+
+    @pytest.fixture
+    def service_with_ai(self, temp_db, ai_config, monkeypatch):
+        """Create service with AI enabled."""
+        config = {
+            'database_path': temp_db,
+            'verbose_logging': False,
+            'ai_analysis': ai_config,
+            'send_individual_notifications': False
+        }
+        
+        # Mock SecretsManager to avoid needing real API key
+        mock_secrets = Mock()
+        mock_secrets.get_secret.return_value = "test-api-key"
+        
+        def mock_secrets_init(self):
+            return mock_secrets
+        
+        monkeypatch.setattr('robotray.services.jobhunter_service.SecretsManager', 
+                           lambda: mock_secrets)
+        
+        # Create service
+        service = JobHunterService("jobhunter-service", config)
+        
+        # Mock _send_response to avoid actual message sending
+        service._send_response = Mock()
+        
+        # Initialize database manager
+        from robotray.services.jobhunter_db import JobHunterDatabaseManager
+        service.db_manager = JobHunterDatabaseManager(temp_db)
+        service.db_manager.initialize_database()
+        
+        yield service
+
+    def test_ai_config_loading(self, service_with_ai, ai_config):
+        """Test that AI configuration is loaded correctly."""
+        assert service_with_ai.ai_enabled is True
+        assert service_with_ai.ai_model == 'claude-3-5-haiku-20241022'
+        assert service_with_ai.ai_summary_model == 'claude-sonnet-4-20250514'
+        assert service_with_ai.ai_prescreen_threshold == 70
+        assert service_with_ai.ai_min_score == 60
+        assert service_with_ai._cv_content is not None
+        assert len(service_with_ai._cv_content) > 0
+
+    def test_cv_loading(self, service_with_ai):
+        """Test CV content is loaded from file."""
+        assert service_with_ai._cv_content is not None
+        assert "Python" in service_with_ai._cv_content
+        assert "Senior Software Engineer" in service_with_ai._cv_content
+
+    def test_cost_calculation_haiku(self, service_with_ai):
+        """Test AI cost calculation for Haiku model."""
+        # Haiku: $0.25/$1.25 per 1M tokens
+        cost = service_with_ai._calculate_ai_cost(1000, 400, 'claude-3-5-haiku-20241022')
+        expected = (1000 / 1_000_000) * 0.25 + (400 / 1_000_000) * 1.25
+        assert abs(cost - expected) < 0.0001
+
+    def test_cost_calculation_sonnet(self, service_with_ai):
+        """Test AI cost calculation for Sonnet model."""
+        # Sonnet: $3/$15 per 1M tokens
+        cost = service_with_ai._calculate_ai_cost(2000, 800, 'claude-sonnet-4-20250514')
+        expected = (2000 / 1_000_000) * 3.0 + (800 / 1_000_000) * 15.0
+        assert abs(cost - expected) < 0.0001
+
+    def test_cost_calculation_opus(self, service_with_ai):
+        """Test AI cost calculation for Opus model."""
+        # Opus: $15/$75 per 1M tokens
+        cost = service_with_ai._calculate_ai_cost(2000, 800, 'claude-opus-4-20250514')
+        expected = (2000 / 1_000_000) * 15.0 + (800 / 1_000_000) * 75.0
+        assert abs(cost - expected) < 0.0001
+
+    def test_ai_prescreen_filtering(self, service_with_ai, db_manager):
+        """Test that jobs are pre-filtered by criteria score before AI analysis."""
+        # Add test jobs with different scores
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        
+        # High score job (should be analyzed)
+        high_score_job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-job1", title="Senior Python Engineer", url="https://example.com/job1", location="Remote")
+        
+        # Low score job (should be skipped)
+        low_score_job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-job2", title="Junior Data Entry", url="https://example.com/job2", location="On-site")
+        
+        # Simulate matching with scores
+        high_score_job = db_manager.get_job_by_id(high_score_job_id)
+        low_score_job = db_manager.get_job_by_id(low_score_job_id)
+        
+        deep_scraped_jobs = [
+            {'job': high_score_job, 'score': 85},  # Above threshold
+            {'job': low_score_job, 'score': 45}    # Below threshold
+        ]
+        
+        # Filter by prescreen threshold
+        ai_candidates = [m for m in deep_scraped_jobs 
+                        if m['score'] >= service_with_ai.ai_prescreen_threshold]
+        
+        # Only high-scoring job should pass
+        assert len(ai_candidates) == 1
+        assert ai_candidates[0]['job']['id'] == high_score_job_id
+
+    def test_ai_analysis_mock_response(self, service_with_ai, db_manager, monkeypatch):
+        """Test AI analysis with mocked Claude API response."""
+        # Add test job
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-test-job", title="Senior Python Developer", url="https://example.com/job", location="Remote", description="Looking for a Python expert with FastAPI experience. 10+ years required.")
+        
+        job = db_manager.get_job_by_id(job_id)
+        
+        # Mock Claude API response
+        mock_response = Mock()
+        mock_response.content = [Mock(text='''{
+            "ai_score": 95,
+            "reasoning": "Excellent match - candidate has 10+ years Python and FastAPI expertise",
+            "fit_summary": "Strong alignment with requirements",
+            "concerns": [],
+            "recommendation": "APPLY"
+        }''')]
+        mock_response.usage = Mock(input_tokens=1000, output_tokens=400)
+        
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        service_with_ai.anthropic_client = mock_client
+        
+        # Run analysis
+        result = service_with_ai._analyze_job_with_cv(job)
+        
+        # Verify result
+        assert result is not None
+        assert result['ai_score'] == 95
+        assert result['recommendation'] == 'APPLY'
+        assert 'Python' in result['reasoning']
+
+    def test_ai_analysis_json_parsing_with_markdown(self, service_with_ai, db_manager, monkeypatch):
+        """Test JSON parsing when response includes markdown code blocks."""
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-test-job", title="Backend Engineer", url="https://example.com/job", location="Remote", description="Python backend role")
+        
+        job = db_manager.get_job_by_id(job_id)
+        
+        # Mock response with markdown code blocks
+        mock_response = Mock()
+        mock_response.content = [Mock(text='''```json
+{
+    "ai_score": 75,
+    "reasoning": "Good match",
+    "fit_summary": "Solid candidate",
+    "concerns": ["Limited senior experience"],
+    "recommendation": "REVIEW"
+}
+```''')]
+        mock_response.usage = Mock(input_tokens=800, output_tokens=300)
+        
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        service_with_ai.anthropic_client = mock_client
+        
+        # Run analysis
+        result = service_with_ai._analyze_job_with_cv(job)
+        
+        # Should successfully parse despite markdown
+        assert result is not None
+        assert result['ai_score'] == 75
+        assert result['recommendation'] == 'REVIEW'
+
+    def test_ai_analysis_json_parsing_with_extra_text(self, service_with_ai, db_manager, monkeypatch):
+        """Test JSON parsing when response has extra text after JSON."""
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-test-job", title="Backend Engineer", url="https://example.com/job", location="Remote", description="Python role")
+        
+        job = db_manager.get_job_by_id(job_id)
+        
+        # Mock response with extra text after JSON
+        mock_response = Mock()
+        mock_response.content = [Mock(text='''{
+    "ai_score": 85,
+    "reasoning": "Strong fit",
+    "fit_summary": "Excellent candidate",
+    "concerns": [],
+    "recommendation": "APPLY"
+}
+
+Note: This candidate would be perfect for the role.''')]
+        mock_response.usage = Mock(input_tokens=900, output_tokens=350)
+        
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        service_with_ai.anthropic_client = mock_client
+        
+        # Run analysis
+        result = service_with_ai._analyze_job_with_cv(job)
+        
+        # Should successfully parse JSON and ignore extra text
+        assert result is not None
+        assert result['ai_score'] == 85
+
+    def test_ai_analysis_records_cost(self, service_with_ai, db_manager, monkeypatch):
+        """Test that AI analysis cost is recorded to database."""
+        # Add test job
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-test-job", title="Python Developer", url="https://example.com/job", location="Remote", description="Python role")
+        
+        job = db_manager.get_job_by_id(job_id)
+        
+        # Mock API response
+        mock_response = Mock()
+        mock_response.content = [Mock(text='{"ai_score": 80, "reasoning": "Good", "fit_summary": "Good", "concerns": [], "recommendation": "REVIEW"}')]
+        mock_response.usage = Mock(input_tokens=1000, output_tokens=400)
+        
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        service_with_ai.anthropic_client = mock_client
+        
+        # Run analysis
+        result = service_with_ai._analyze_job_with_cv(job)
+        
+        # Check cost was recorded
+        stats = db_manager.get_ai_stats(days=1)
+        assert stats['total_analyses'] == 1
+        assert stats['total_cost'] > 0
+        assert stats['avg_cost_per_job'] > 0
+
+    def test_ai_stats_calculation(self, db_manager):
+        """Test AI statistics calculation."""
+        # Add test data
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-test", title="Test Job", url="https://example.com/job", location="Remote")
+        
+        # Record multiple analyses
+        db_manager.record_ai_analysis(job_id, 1000, 400, 'claude-3-5-haiku-20241022', 0.0017, 'job')
+        db_manager.record_ai_analysis(job_id, 1200, 450, 'claude-3-5-haiku-20241022', 0.0019, 'job')
+        db_manager.record_ai_analysis(job_id, 2000, 800, 'claude-sonnet-4-20250514', 0.024, 'summary')
+        
+        # Get stats
+        stats = db_manager.get_ai_stats(days=1)
+        
+        assert stats['total_analyses'] == 3
+        assert abs(stats['total_cost'] - 0.0276) < 0.001
+        assert stats['avg_cost_per_job'] > 0
+
+    def test_notification_history_tracking(self, db_manager):
+        """Test that notification dates are tracked."""
+        from datetime import datetime, timezone
+        
+        # Add job and match
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-test", title="Test Job", url="https://example.com/job", location="Remote")
+        
+        # Record match with AI analysis
+        db_manager.update_job_match_ai_analysis(
+            job_id=job_id,
+            ai_score=85,
+            ai_reasoning="Good match",
+            ai_recommendation="REVIEW"
+        )
+        
+        # Update notification date
+        now = datetime.now(timezone.utc).isoformat()
+        with db_manager._get_connection() as conn:
+            conn.execute(
+                "UPDATE job_matches SET notified_date = ? WHERE job_id = ?",
+                (now, job_id)
+            )
+        
+        # Verify notification date was recorded by querying database directly
+        with db_manager._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT notified_date FROM job_matches WHERE job_id = ?",
+                (job_id,)
+            )
+            row = cursor.fetchone()
+            assert row is not None
+            assert row[0] is not None
+
+    def test_send_individual_notifications_config(self, temp_db, ai_config):
+        """Test send_individual_notifications configuration."""
+        # Test default (False)
+        config_default = {
+            'database_path': temp_db,
+            'ai_analysis': ai_config
+        }
+        service = JobHunterService("test", config_default)
+        assert service.send_individual_notifications is False
+        
+        # Test explicit True
+        config_true = {
+            'database_path': temp_db,
+            'ai_analysis': ai_config,
+            'send_individual_notifications': True
+        }
+        service_true = JobHunterService("test", config_true)
+        assert service_true.send_individual_notifications is True
+
+    def test_analyze_job_command(self, service_with_ai, db_manager, monkeypatch):
+        """Test manual job analysis command."""
+        # Add test job
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(company_id=company_id, job_hash="hash-test", title="Python Engineer", url="https://example.com/job", location="Remote", description="Python backend development")
+        
+        # Mock API response
+        mock_response = Mock()
+        mock_response.content = [Mock(text='{"ai_score": 90, "reasoning": "Excellent", "fit_summary": "Great", "concerns": [], "recommendation": "APPLY"}')]
+        mock_response.usage = Mock(input_tokens=1000, output_tokens=400)
+        
+        mock_client = Mock()
+        mock_client.messages.create.return_value = mock_response
+        service_with_ai.anthropic_client = mock_client
+        
+        # Run command
+        service_with_ai._handle_analyze_job("test-sender", f"analyze-job {job_id}", None)
+        
+        # Verify response was sent
+        assert service_with_ai._send_response.called
+
+    def test_ai_disabled_workflow(self, temp_db):
+        """Test that workflow works correctly when AI is disabled."""
+        config = {
+            'database_path': temp_db,
+            'ai_analysis': {'enabled': False},
+            'verbose_logging': False
+        }
+        
+        service = JobHunterService("test", config)
+        assert service.ai_enabled is False
+        assert service.anthropic_client is None
+        
+        # Service should work normally without AI
+        # (would need more setup for full workflow test)
