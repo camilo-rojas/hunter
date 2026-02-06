@@ -3320,6 +3320,100 @@ class TestParsers:
         service._deep_scrape_greenhouse_job.assert_called_once_with(456, "https://job-boards.greenhouse.io/anthropic/jobs/123")
 
     # =========================================================================
+    # Lever Parser Tests
+    # =========================================================================
+
+    def test_lever_parser_api_response(self, service):
+        """Test Lever parser extracts jobs from API response."""
+        mock_api_response = [
+            {
+                "text": "AI Scientist",
+                "hostedUrl": "https://jobs.lever.co/mistral/abc-123",
+                "categories": {
+                    "location": "Paris",
+                    "team": "Research",
+                    "allLocations": ["Paris", "London"]
+                },
+                "workplaceType": "hybrid",
+                "descriptionPlain": "Join our team to work on frontier AI models...",
+                "createdAt": 1760425748456
+            },
+            {
+                "text": "ML Engineer",
+                "hostedUrl": "https://jobs.lever.co/mistral/def-456",
+                "categories": {
+                    "location": "Remote",
+                    "team": "Engineering"
+                },
+                "workplaceType": "remote",
+                "descriptionPlain": "Build scalable ML infrastructure...",
+                "createdAt": 1760425748456
+            }
+        ]
+
+        with patch('requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_api_response
+            mock_get.return_value = mock_response
+
+            jobs = service._scrape_lever("https://jobs.lever.co/mistral")
+
+        assert len(jobs) == 2
+        assert jobs[0]['title'] == "AI Scientist"
+        assert "Paris" in jobs[0]['location']
+        assert "London" in jobs[0]['location']
+        assert jobs[0]['department'] == "Research"
+        assert "frontier AI" in jobs[0]['description']
+
+        assert jobs[1]['title'] == "ML Engineer"
+        assert "Remote" in jobs[1]['location']
+
+    def test_lever_parser_handles_empty_response(self, service):
+        """Test Lever parser handles empty API response."""
+        with patch('requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = []
+            mock_get.return_value = mock_response
+
+            jobs = service._scrape_lever("https://jobs.lever.co/testcompany")
+
+        assert len(jobs) == 0
+
+    def test_lever_parser_handles_api_error(self, service):
+        """Test Lever parser handles API errors gracefully."""
+        with patch('requests.get') as mock_get:
+            mock_response = Mock()
+            mock_response.status_code = 404
+            mock_get.return_value = mock_response
+
+            jobs = service._scrape_lever("https://jobs.lever.co/nonexistent")
+
+        assert len(jobs) == 0
+
+    def test_lever_deep_scrape_url_routing(self, service):
+        """Test that lever.co URLs route to Lever deep scraper."""
+        service._deep_scrape_lever_job = Mock(return_value=True)
+
+        result = service._deep_scrape_job(789, "https://jobs.lever.co/mistral/abc-123")
+
+        service._deep_scrape_lever_job.assert_called_once_with(789, "https://jobs.lever.co/mistral/abc-123")
+
+    def test_scraper_type_routing_lever(self, service):
+        """Test that lever scraper type routes correctly."""
+        service._scrape_lever = Mock(return_value=[{'title': 'Test', 'url': 'http://test.com', 'location': '', 'description': 'Full description here'}])
+
+        jobs = service._scrape_company(
+            company_id=1,
+            company_name="Test Co",
+            careers_url="https://jobs.lever.co/test",
+            scraper_type="lever"
+        )
+
+        assert service._scrape_lever.called
+
+    # =========================================================================
     # Scraper Routing Tests
     # =========================================================================
 

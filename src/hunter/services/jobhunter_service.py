@@ -2727,7 +2727,11 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             if 'ashbyhq.com' in job_url:
                 return self._deep_scrape_ashby_job(job_id, job_url)
 
-            # Fetch job detail page with politeness delay (non-Greenhouse/Ashby)
+            # Check if this is a Lever job
+            if 'lever.co' in job_url:
+                return self._deep_scrape_lever_job(job_id, job_url)
+
+            # Fetch job detail page with politeness delay (non-Greenhouse/Ashby/Lever)
             if self.verbose_logging:
                 self.logger.info(f"jobhunter-service: Deep scraping job {job_id}: {job_url}")
             html = self._fetch_with_retry(job_url, politeness_delay=2.0)
@@ -3033,6 +3037,111 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
 
         except Exception as e:
             self.logger.error(f"jobhunter-service: Error deep scraping Ashby job {job_id}: {e}")
+            return False
+
+    def _deep_scrape_lever_job(self, job_id: int, job_url: str) -> bool:
+        """
+        Deep scrape a Lever job to get full details.
+
+        Lever job URLs contain a unique ID that can be used to fetch from the API.
+        URL format: https://jobs.lever.co/{company}/{job_uuid}
+
+        Args:
+            job_id: Database ID of job to update
+            job_url: Lever job URL
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import json
+            import re
+            import requests
+            from urllib.parse import urlparse
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Deep scraping Lever job {job_id}: {job_url}")
+
+            # Extract company and job UUID from URL
+            # URL format: https://jobs.lever.co/{company}/{job_uuid}
+            parsed = urlparse(job_url)
+            path_parts = parsed.path.strip('/').split('/')
+
+            if len(path_parts) < 2:
+                self.logger.warning(f"jobhunter-service: Could not parse Lever job URL: {job_url}")
+                return False
+
+            company_slug = path_parts[0]
+            job_uuid = path_parts[1]
+
+            # Fetch job details from Lever API
+            api_url = f"https://api.lever.co/v0/postings/{company_slug}/{job_uuid}"
+
+            headers = {
+                'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                'Accept': 'application/json'
+            }
+
+            response = requests.get(api_url, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                self.logger.warning(f"jobhunter-service: Lever API returned {response.status_code} for job {job_id}")
+                return False
+
+            job_data = response.json()
+
+            # Extract description
+            description = job_data.get('descriptionPlain', '') or job_data.get('description', '')
+
+            # Clean HTML from description if present
+            if description and '<' in description:
+                soup = BeautifulSoup(description, 'lxml')
+                description = soup.get_text(separator='\n', strip=True)
+
+            # Extract salary if present in description
+            salary_text = None
+            salary_min = None
+            salary_max = None
+
+            if description:
+                salary_patterns = [
+                    r'\$(\d{1,3}(?:,\d{3})*(?:k)?)\s*-\s*\$(\d{1,3}(?:,\d{3})*(?:k)?)',
+                    r'\$(\d{1,3}(?:,\d{3})*(?:k)?)\+',
+                ]
+
+                for pattern in salary_patterns:
+                    match = re.search(pattern, description, re.IGNORECASE)
+                    if match:
+                        salary_text = match.group(0)
+                        if '-' in salary_text:
+                            salary_min = self._parse_salary(match.group(1))
+                            salary_max = self._parse_salary(match.group(2))
+                        else:
+                            salary_min = self._parse_salary(match.group(1))
+                        break
+
+            # Update database
+            if description and len(description) > 50:
+                self.db_manager.update_job_details(
+                    job_id=job_id,
+                    description=description,
+                    salary_text=salary_text,
+                    salary_min=salary_min,
+                    salary_max=salary_max
+                )
+                if self.verbose_logging:
+                    self.logger.info(
+                        f"jobhunter-service: Lever API returned {len(description)} chars for job {job_id}"
+                    )
+                return True
+            else:
+                self.logger.warning(
+                    f"jobhunter-service: No valid description from Lever API for job {job_id}"
+                )
+                return False
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error deep scraping Lever job {job_id}: {e}")
             return False
 
     def _deep_scrape_matches(self, matched_jobs: List[Dict[str, Any]]) -> int:
@@ -3390,6 +3499,105 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
 
+    def _scrape_lever(self, careers_url: str) -> List[Dict[str, Any]]:
+        """
+        Scrape jobs from a Lever job board using their public API.
+
+        Lever provides a JSON API that returns all job postings with full descriptions.
+        API endpoint: https://api.lever.co/v0/postings/{company}?mode=json
+
+        Args:
+            careers_url: URL of Lever job board (e.g., https://jobs.lever.co/mistral)
+
+        Returns:
+            List of job dictionaries with keys: title, url, location, description, department
+        """
+        try:
+            import json
+            import requests
+            from urllib.parse import urlparse
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Using Lever parser for {careers_url}")
+
+            # Extract company slug from URL
+            # URL format: https://jobs.lever.co/{company}
+            parsed = urlparse(careers_url)
+            path_parts = parsed.path.strip('/').split('/')
+            company_slug = path_parts[0] if path_parts else None
+
+            if not company_slug:
+                self.logger.warning(f"jobhunter-service: Could not extract company slug from Lever URL: {careers_url}")
+                return []
+
+            # Call Lever API
+            api_url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json"
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Fetching Lever API: {api_url}")
+
+            headers = {
+                'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                'Accept': 'application/json'
+            }
+
+            response = requests.get(api_url, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                self.logger.warning(f"jobhunter-service: Lever API returned {response.status_code}")
+                return []
+
+            job_data = response.json()
+
+            if not job_data:
+                self.logger.info(f"jobhunter-service: Lever API returned no jobs for {company_slug}")
+                return []
+
+            jobs = []
+            for job in job_data:
+                # Extract location from categories
+                categories = job.get('categories', {})
+                location = categories.get('location', '')
+                all_locations = categories.get('allLocations', [])
+                if all_locations and len(all_locations) > 1:
+                    location = ', '.join(all_locations)
+
+                # Add workplace type if available
+                workplace_type = job.get('workplaceType', '')
+                if workplace_type and workplace_type.lower() == 'remote':
+                    location = f"Remote - {location}" if location else "Remote"
+
+                # Get department/team
+                department = categories.get('team', '')
+
+                # Get description (Lever provides full description in API!)
+                description = job.get('descriptionPlain', '') or job.get('description', '')
+
+                # Clean HTML from description if present
+                if description and '<' in description:
+                    soup = BeautifulSoup(description, 'lxml')
+                    description = soup.get_text(separator='\n', strip=True)
+
+                jobs.append({
+                    'title': job.get('text', 'Unknown'),
+                    'url': job.get('hostedUrl', ''),
+                    'location': location,
+                    'description': description,  # Full description from API
+                    'department': department,
+                    'posted_date': job.get('createdAt'),  # Unix timestamp in ms
+                })
+
+            if self.verbose_logging:
+                self.logger.info(f"jobhunter-service: Lever API returned {len(jobs)} jobs for {company_slug}")
+
+            return jobs
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error in Lever parser: {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            return []
+
     def _scrape_company(self, company_id: int, company_name: str, careers_url: str,
                        scraper_type: str = 'generic', check_robots: bool = False,
                        politeness_delay: float = 2.0) -> List[Dict[str, Any]]:
@@ -3425,10 +3633,7 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             elif scraper_type.lower() == 'ashby':
                 jobs = self._scrape_ashby(careers_url)
             elif scraper_type.lower() == 'lever':
-                # TODO: Implement Lever parser (Phase 2 - Future)
-                self.logger.warning(f"jobhunter-service: Lever parser not implemented yet, falling back to generic")
-                html = self._fetch_with_retry(careers_url, politeness_delay=politeness_delay)
-                jobs = self._scrape_generic_html(html, careers_url)
+                jobs = self._scrape_lever(careers_url)
             elif scraper_type.lower() == 'workday':
                 # TODO: Implement Workday parser (Phase 2 - Future, may need browser automation)
                 self.logger.warning(f"jobhunter-service: Workday parser not implemented yet, falling back to generic")
