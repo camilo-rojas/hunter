@@ -100,12 +100,15 @@ class JobHunterService(BaseService):
         self.ai_min_score = ai_config.get('min_score_threshold', 90)
         self.ai_cost_limit_daily = ai_config.get('cost_limit_daily', 5.00)
         self.cv_path = Path(ai_config.get('cv_path', 'data/cv/resume.md'))
+        self.cv_dir = self.cv_path.parent
+        self.goal_path = self.cv_dir / 'goal.md'
         self.ai_prompt_template = ai_config.get('prompt_template', None)  # User-customizable job analysis prompt
         self.ai_summary_prompt_template = ai_config.get('summary_prompt_template', None)  # User-customizable summary prompt
 
         # Initialize AI client if enabled
         self.anthropic_client: Optional[Anthropic] = None
         self._cv_content: Optional[str] = None
+        self._goal_content: Optional[str] = None
 
         # Notification preferences
         self.send_individual_notifications = self.config.get('send_individual_notifications', False)
@@ -141,6 +144,19 @@ class JobHunterService(BaseService):
                         self.logger.warning(
                             f"jobhunter-service: CV not found at {self.cv_path}, "
                             "AI analysis will work without CV context"
+                        )
+
+                    # Load search goal (cached in memory)
+                    if self.goal_path.exists():
+                        self._goal_content = self.goal_path.read_text().strip()
+                        self.logger.info(
+                            f"jobhunter-service: Search goal loaded from {self.goal_path} "
+                            f"({len(self._goal_content)} characters)"
+                        )
+                    else:
+                        self.logger.info(
+                            "jobhunter-service: No search goal found. "
+                            "Set one with: @jobhunter-service goal <your goal>"
                         )
                 else:
                     self.logger.error(
@@ -589,6 +605,10 @@ class JobHunterService(BaseService):
                 self._handle_ai_stats(sender, args, correlation_id)
             elif command == "list-ai-approved":
                 self._handle_list_ai_approved(sender, args, correlation_id)
+            elif command == "goal":
+                self._handle_goal(sender, args, correlation_id)
+            elif command == "load-cv":
+                self._handle_load_cv(sender, args, correlation_id)
             else:
                 self._send_error_response(
                     sender,
@@ -694,8 +714,16 @@ Automatically scrape company career pages, intelligently filter positions based 
 • `list-stale-jobs [days]` - Show jobs older than N days (default: 14)
   Example: @jobhunter-service list-stale-jobs 30
 
+**Profile & Goal Management:**
+• `goal` - View your current search goal
+• `goal <text>` - Set your search goal in first person
+  Example: @jobhunter-service goal Im looking for a VP Sales role at a startup, remote preferred, 250k base...
+  The goal guides AI analysis to match your personal preferences beyond keywords.
+• `load-cv` - Extract CV from PDF in data/cv/ directory and create resume.md
+  Automatically finds the most recent PDF and converts it to text.
+
 **AI-Powered Analysis (Phase 11 ✅):**
-• `analyze-job <job_id>` - Analyze a specific job with AI (compares against CV + criteria)
+• `analyze-job <job_id>` - Analyze a specific job with AI (compares against CV + criteria + goal)
   Example: @jobhunter-service analyze-job 123
   Returns: AI score (0-100), reasoning, recommendation (APPLY/REVIEW/SKIP)
 
@@ -988,6 +1016,8 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 response += f"   💰 Cost filter: Only analyze jobs with criteria score >= {self.ai_prescreen_threshold}\n"
                 cv_status = "✅" if self._cv_content else "❌"
                 response += f"   CV loaded: {cv_status}\n"
+                goal_status = "✅" if self._goal_content else "❌ (set with: goal <text>)"
+                response += f"   Search goal: {goal_status}\n"
 
                 # Show AI cost statistics
                 ai_stats = self.db_manager.get_ai_stats(days=30)  # Last 30 days
@@ -2443,6 +2473,166 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self._send_error_response(sender, f"Failed to list AI-approved jobs: {str(e)}", correlation_id=correlation_id)
 
     # ============================================================================
+    # Goal & CV Management
+    # ============================================================================
+
+    def _handle_goal(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle goal command - view or set the search goal.
+
+        Usage:
+          goal              - Show current search goal
+          goal <text>       - Set a new search goal
+        """
+        try:
+            if not args:
+                # Show current goal
+                if self._goal_content:
+                    response = "🎯 **My Search Goal**\n\n"
+                    response += self._goal_content
+                else:
+                    response = (
+                        "🎯 **No search goal set.**\n\n"
+                        "Set your goal in first person to guide AI job matching:\n"
+                        "  @jobhunter-service goal Im looking for a VP Sales role "
+                        "at a frontier AI company, remote preferred..."
+                    )
+                self._send_response(sender, response, correlation_id=correlation_id)
+                return
+
+            # Set new goal
+            goal_text = " ".join(args)
+
+            # Ensure cv directory exists
+            self.cv_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write goal to file
+            self.goal_path.write_text(goal_text + "\n")
+            self._goal_content = goal_text
+
+            self.logger.info(
+                f"jobhunter-service: Search goal updated ({len(goal_text)} characters)"
+            )
+
+            response = "🎯 **Search goal updated!**\n\n"
+            response += f"{goal_text}\n\n"
+            response += (
+                "This goal will be included in all AI job analysis to "
+                "better match positions to your personal preferences."
+            )
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error handling goal command: {e}")
+            self._send_error_response(
+                sender, f"Failed to handle goal: {str(e)}", correlation_id=correlation_id
+            )
+
+    def _handle_load_cv(self, sender: str, args: List[str], correlation_id: str = None):
+        """
+        Handle load-cv command - find PDF in cv directory and create resume.md.
+
+        Usage:
+          load-cv           - Auto-detect PDF in data/cv/ directory
+        """
+        try:
+            # Ensure cv directory exists
+            self.cv_dir.mkdir(parents=True, exist_ok=True)
+
+            # Find PDF files in the cv directory
+            pdf_files = list(self.cv_dir.glob("*.pdf"))
+
+            if not pdf_files:
+                self._send_error_response(
+                    sender,
+                    f"❌ No PDF files found in {self.cv_dir}/\n"
+                    f"Place your CV as a PDF file there and try again.",
+                    correlation_id=correlation_id,
+                )
+                return
+
+            # Use the most recently modified PDF
+            pdf_path = max(pdf_files, key=lambda p: p.stat().st_mtime)
+
+            self.logger.info(
+                f"jobhunter-service: Loading CV from {pdf_path.name}"
+            )
+
+            # Extract text from PDF
+            try:
+                import PyPDF2
+
+                text_parts = []
+                with open(pdf_path, "rb") as f:
+                    reader = PyPDF2.PdfReader(f)
+                    for page_num, page in enumerate(reader.pages):
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_parts.append(page_text)
+
+                if not text_parts:
+                    self._send_error_response(
+                        sender,
+                        f"❌ Could not extract text from {pdf_path.name}. "
+                        "The PDF may be image-based (scanned). "
+                        "Try saving your CV as a text-based PDF.",
+                        correlation_id=correlation_id,
+                    )
+                    return
+
+                extracted_text = "\n\n".join(text_parts)
+
+            except ImportError:
+                self._send_error_response(
+                    sender,
+                    "❌ PyPDF2 library not installed. Run: pip install PyPDF2",
+                    correlation_id=correlation_id,
+                )
+                return
+
+            # Build resume.md content
+            md_content = f"# CV - Extracted from {pdf_path.name}\n\n"
+            md_content += extracted_text
+
+            # Append existing goal reference if goal exists
+            if self._goal_content:
+                md_content += "\n\n---\n\n"
+                md_content += "## Search Goal\n\n"
+                md_content += f"See goal.md for current search goal.\n"
+
+            # Write resume.md
+            self.cv_path.write_text(md_content)
+
+            # Reload into memory
+            self._cv_content = md_content
+
+            self.logger.info(
+                f"jobhunter-service: CV extracted from {pdf_path.name} -> "
+                f"resume.md ({len(md_content)} characters, "
+                f"{len(text_parts)} pages)"
+            )
+
+            response = f"📄 **CV Loaded Successfully**\n\n"
+            response += f"Source: `{pdf_path.name}`\n"
+            response += f"Pages extracted: {len(text_parts)}\n"
+            response += f"Characters: {len(md_content):,}\n"
+            response += f"Saved to: `{self.cv_path}`\n\n"
+            response += (
+                "Your CV is now available for AI job analysis. "
+                "The AI will compare job postings against your profile."
+            )
+            self._send_response(sender, response, correlation_id=correlation_id)
+
+        except Exception as e:
+            self.logger.error(f"jobhunter-service: Error loading CV: {e}")
+            import traceback
+
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self._send_error_response(
+                sender, f"Failed to load CV: {str(e)}", correlation_id=correlation_id
+            )
+
+    # ============================================================================
     # Web Scraping (Phase 4)
     # ============================================================================
 
@@ -3863,6 +4053,7 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 # Use user-customizable template from config
                 prompt = self.ai_prompt_template.format(
                     cv_content=self._cv_content if self._cv_content else "[CV not provided]",
+                    goal_content=self._goal_content if self._goal_content else "[No search goal set]",
                     criteria_summary=criteria_summary,
                     job_title=job.get('title', 'Unknown'),
                     job_company=job.get('company_name', 'Unknown'),
@@ -3872,11 +4063,17 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
                 )
             else:
                 # Fallback to default prompt
+                goal_section = ""
+                if self._goal_content:
+                    goal_section = f"""
+CANDIDATE'S SEARCH GOAL (in their own words):
+{self._goal_content}
+"""
                 prompt = f"""You are an expert job matching assistant. Analyze this job opportunity.
 
 USER PROFILE (CV):
 {self._cv_content if self._cv_content else "[CV not provided]"}
-
+{goal_section}
 USER CRITERIA:
 {criteria_summary}
 
@@ -3890,7 +4087,7 @@ Description:
 {job.get('description', 'No description available')}
 
 TASK:
-Evaluate this job against the user's profile and criteria. Be SELECTIVE - only score 90+ for truly excellent matches where the user's experience, skills, and preferences align very well.
+Evaluate this job against the user's profile, search goal, and criteria. Be SELECTIVE - only score 90+ for truly excellent matches where the user's experience, skills, and preferences align very well. Pay special attention to the candidate's search goal for role type, compensation, location, and work style preferences.
 
 Provide:
 1. Overall fit score (0-100) - Be selective, 90+ means excellent match
@@ -4180,17 +4377,24 @@ Respond in JSON format:
                 # Use user-customizable template from config
                 prompt = self.ai_summary_prompt_template.format(
                     cv_content=self._cv_content if self._cv_content else "[CV not provided]",
+                    goal_content=self._goal_content if self._goal_content else "[No search goal set]",
                     criteria_summary=criteria_summary,
                     jobs_text=jobs_text,
                     job_count=len(approved_jobs)
                 )
             else:
                 # Fallback to default prompt
+                goal_section = ""
+                if self._goal_content:
+                    goal_section = f"""
+YOUR CLIENT'S SEARCH GOAL (in their own words):
+{self._goal_content}
+"""
                 prompt = f"""You are a professional hiring assistant helping your client find their next career opportunity.
 
 YOUR CLIENT'S PROFILE:
 {self._cv_content if self._cv_content else "[CV not provided]"}
-
+{goal_section}
 THEIR JOB SEARCH CRITERIA:
 {criteria_summary}
 
