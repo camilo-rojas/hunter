@@ -1,7 +1,8 @@
 # ADR-005: JobHunter Service - Automated Job Search and Matching
 
 **Date:** 2026-01-30
-**Status:** ✅ Approved
+**Completed:** 2026-02-07
+**Status:** ✅ Complete — All phases implemented (Phase 4.5 deferred as unnecessary)
 **Decision Makers:** Architecture Review
 **Supersedes:** None
 **Related:** ADR-001 (Multi-Channel), ADR-002 (Service Isolation), ADR-003 (Messaging & Identity)
@@ -1549,7 +1550,7 @@ Users can manually tune criteria weights based on results, which is a form of "m
 
 **Verification:** Can scrape job listings from public career pages
 
-### Phase 4.5: Authentication & Protected Career Pages (3-4 hours)
+### Phase 4.5: Authentication & Protected Career Pages (3-4 hours) — DEFERRED (not needed)
 Many companies restrict career pages behind authentication (Workday, internal portals, employee referral systems). This phase adds intelligent auth detection and credential management.
 
 **Authentication Scenarios:**
@@ -2703,7 +2704,7 @@ def _send_notifications(matches):
 
 **Verification:** ✅ All 111 tests pass with 100% success rate
 
-### Phase 11: AI-Powered Job Analysis (2-3 hours)
+### Phase 11: AI-Powered Job Analysis ✅ COMPLETE (2026-02-06) (2-3 hours)
 
 **Goal:** Enhance matching accuracy by using Claude API for semantic analysis of job descriptions, catching nuanced matches that strict string/range matching misses.
 
@@ -2930,16 +2931,16 @@ def test_ai_analysis():
 - Phase 3: Criteria Management (3-4h) ✅
 - Phase 3.5: Range Support (2h) ✅
 - Phase 4: Web Scraping - Light Scrape (3-4h) ✅
-- Phase 4.5: Authentication (3-4h)
+- Phase 4.5: Authentication (3-4h) — DEFERRED (not needed)
 - Phase 5: Job Filtering & Scoring (2-3h) ✅
 - Phase 5.5: Deep Scrape for Matches (2-3h) ✅
-- Phase 6: Scheduler (2h)
-- Phase 7: Schedule Management (2h)
-- Phase 8: Freshness Detection (2-3h)
-- Phase 9: Notifications (1-2h)
-- Phase 10: Testing (2-3h)
-- Phase 11: AI-Powered Analysis (2-3h)
-- Phase 12: Documentation (1h)
+- Phase 6: Scheduler (2h) ✅
+- Phase 7: Schedule Management (2h) ✅
+- Phase 8: Freshness Detection (2-3h) ✅
+- Phase 9: Notifications (1-2h) ✅
+- Phase 10: Testing (2-3h) ✅
+- Phase 11: AI-Powered Analysis (2-3h) ✅
+- Phase 12: Documentation (1h) — Inline with each phase
 
 ---
 
