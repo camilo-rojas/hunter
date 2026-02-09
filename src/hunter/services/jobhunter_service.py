@@ -609,6 +609,13 @@ class JobHunterService(BaseService):
                 self._handle_goal(sender, args, correlation_id)
             elif command == "load-cv":
                 self._handle_load_cv(sender, args, correlation_id)
+            # Run History Commands
+            elif command == "history":
+                self._handle_history(sender, args, correlation_id)
+            elif command == "last-run":
+                self._handle_last_run(sender, correlation_id)
+            elif command == "run-detail":
+                self._handle_run_detail(sender, args, correlation_id)
             else:
                 self._send_error_response(
                     sender,
@@ -627,226 +634,71 @@ class JobHunterService(BaseService):
 
     def _handle_help(self, sender: str, correlation_id: str = None):
         """Handle help command."""
-        help_text = """
-**🎯 JobHunter Service - Automated Job Search & Matching**
-
-**Overview:**
-Automatically scrape company career pages, intelligently filter positions based on your criteria (skills, location, salary), and receive matching opportunities via Telegram for rapid application.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**📋 AVAILABLE COMMANDS**
+        help_text = """**JobHunter Service Commands**
 
 **Company Management:**
-• `add-company <name> <url> [scraper_type]`
-  Add a company to monitor for job postings
-  Example: @jobhunter-service add-company Anthropic https://www.anthropic.com/careers
+• **add-company** `<name> <url> [scraper_type]` — Add company to monitor
+  Types: generic (default), greenhouse, lever, ashby
+  Example: `@jobhunter-service add-company Anthropic https://www.anthropic.com/careers`
+• **list-companies** — Show all tracked companies
+• **remove-company** `<id>` — Remove a company
+• **scrape-company** `<id>` — Manually scrape a company's career page
 
-• `list-companies` - Show all tracked companies
-• `remove-company <id>` - Remove a company from tracking
-• `status` - Service health and configuration summary
-• `help` - Show this help message
-
-**Search Criteria (Phase 3 ✅ - Unified Model):**
-• `add-criteria <name> <type> [weight]`
-  Create a search criterion
+**Search Criteria:**
+• **add-criteria** `<name> <type> [weight]` — Create a criterion
   Types: simple, group-any, group-all, group-tiered
-  Examples:
-    Simple: @jobhunter-service add-criteria remote simple 15
-    Group:  @jobhunter-service add-criteria department group-tiered 0
+  Example: `@jobhunter-service add-criteria remote simple 15`
+• **add-criteria-value** `<name> <value> [tier] [weight]` — Add value to group criterion
+  Tiers (group-tiered only): preferred, acceptable, undesirable
+  Ranges: `"200k+"`, `"100k-150k"`, `"5+"`
+  Example: `@jobhunter-service add-criteria-value salary "200k+" preferred 25`
+• **list-criteria** — Show all criteria with IDs
+• **remove-criteria** `<id>` — Remove criterion by ID
+• **remove-criteria-value** `<name> <value>` — Remove value from group criterion
+• **test-criteria** `<job_text>` — Test scoring against sample text
+  Example: `@jobhunter-service test-criteria Senior Engineer - Remote - $250k`
 
-• `add-criteria-value <name> <value> [tier] [weight]`
-  Add value to a criterion (only for group types)
-  For 'group-any/all': @jobhunter-service add-criteria-value department sales
-  For 'group-tiered': @jobhunter-service add-criteria-value department marketing preferred 20
-  Tiers: preferred, acceptable, undesirable
+**Job Scoring & Matching:**
+• **score-jobs** `[limit] [min_score]` — Score jobs against criteria (default: 50, 0)
+  Example: `@jobhunter-service score-jobs 20 70`
+• **score-jobs** `<job_id>` — Full details for a specific job
+• **deep-match** `[min_score] [limit]` — Deep scrape matched jobs (default: 60, 50)
+• **list-new-jobs** — Show newly detected jobs
+• **list-stale-jobs** `[days]` — Jobs older than N days (default: 14)
 
-  **Range Support (Phase 3.5 ✅):**  Numeric ranges for salary, years, etc.
-  - "200k+" = >= $200k     Example: add-criteria-value salary "200k+" preferred 20
-  - "100k-" = <= $100k     Example: add-criteria-value salary "100k-" undesirable -10
-  - "100k-150k" = between  Example: add-criteria-value salary "100k-150k" acceptable 10
-  - "5+" = >= 5 years      Example: add-criteria-value experience "5+" preferred 15
+**Workflow & Scheduling:**
+• **run-now** — Trigger full workflow: scrape → score → deep-match → AI analysis
+• **add-schedule** `<HH:MM> [timezone]` — Add daily run time
+  Example: `@jobhunter-service add-schedule "09:00" "America/New_York"`
+• **list-schedules** — Show scheduled run times
+• **remove-schedule** `<id>` — Remove a schedule
 
-• `list-criteria` - Show all criteria (simple and groups) with IDs
-• `remove-criteria <id>` - Remove criterion by ID (see list-criteria for IDs)
-• `remove-criteria-value <name> <value>` - Remove value from group criterion
+**Run History:**
+• **history** `[limit]` — Recent run history table (default: 10)
+• **last-run** — Summary of the most recent completed run
+• **run-detail** `<id>` — Full details for a specific run
+  Example: `@jobhunter-service run-detail 5`
 
-**Testing:**
-• `test-criteria <job_text>`
-  Test scoring against sample job text (includes individual + grouped criteria)
-  Example: @jobhunter-service test-criteria Senior Sales Engineer - Remote, Latin America - $150k - FastAPI
+**AI Analysis:** (requires `ai_analysis.enabled: true` in config)
+• **analyze-job** `<job_id>` — AI analysis vs CV + criteria + goal
+  Returns: score (0-100), reasoning, recommendation (APPLY/REVIEW/SKIP)
+• **ai-stats** `[days]` — AI usage cost statistics (default: 7)
+• **list-ai-approved** `[limit]` — Jobs approved by AI (default: 20)
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**Profile:**
+• **goal** — View current search goal
+• **goal** `<text>` — Set search goal (guides AI matching)
+  Example: `@jobhunter-service goal VP Sales at a startup, remote, 250k base`
+• **load-cv** — Extract CV from PDF in `data/cv/` directory
 
-**Web Scraping (Phase 4 ✅):**
-• `scrape-company <id>` - Manually scrape a specific company
-  Example: @jobhunter-service scrape-company 1
+**Service:**
+• **status** — Service health, config, and statistics
+• **help** — This help message
 
-**Job Filtering & Scoring (Phase 5 ✅):**
-• `score-jobs [limit] [min_score]` - Score jobs against your criteria
-  Example: @jobhunter-service score-jobs 50 60
-  Default: Shows top 50 jobs with score >= 0
-
-• `score-jobs <job_id>` - Show full details for specific job (with deep-scraped info)
-  Example: @jobhunter-service score-jobs 412
-  Shows: full description, salary, location, score breakdown
-
-**Deep Scraping (Phase 5.5 ✅):**
-• `deep-match [min_score] [limit]` - Deep scrape matched jobs for full details
-  Example: @jobhunter-service deep-match 60 20
-  Default: min_score=60, limit=50
-  Note: Only scrapes jobs with score >= threshold (efficient two-phase strategy)
-
-**Automated Workflow (Phase 6 ✅):**
-• `run-now` - Manually trigger complete workflow
-  Example: @jobhunter-service run-now
-  Workflow: scrape all companies → score jobs → deep-match top results → AI analysis (if enabled)
-  Note: Runs automatically on schedule, or trigger manually anytime
-
-**Schedule Management (Phase 7 ✅):**
-• `add-schedule <time> [timezone]` - Add daily scrape time (HH:MM)
-  Example: @jobhunter-service add-schedule "09:00" "America/New_York"
-• `list-schedules` - Show all scheduled run times with next run
-• `remove-schedule <id>` - Remove a schedule by ID
-
-**Job Management (Phase 8 & 9 ✅):**
-• `list-new-jobs` - Show only NEW jobs (freshness detection with +15 bonus)
-• `list-stale-jobs [days]` - Show jobs older than N days (default: 14)
-  Example: @jobhunter-service list-stale-jobs 30
-
-**Profile & Goal Management:**
-• `goal` - View your current search goal
-• `goal <text>` - Set your search goal in first person
-  Example: @jobhunter-service goal Im looking for a VP Sales role at a startup, remote preferred, 250k base...
-  The goal guides AI analysis to match your personal preferences beyond keywords.
-• `load-cv` - Extract CV from PDF in data/cv/ directory and create resume.md
-  Automatically finds the most recent PDF and converts it to text.
-
-**AI-Powered Analysis (Phase 11 ✅):**
-• `analyze-job <job_id>` - Analyze a specific job with AI (compares against CV + criteria + goal)
-  Example: @jobhunter-service analyze-job 123
-  Returns: AI score (0-100), reasoning, recommendation (APPLY/REVIEW/SKIP)
-
-**💡 AI Analysis Overview:**
-  When AI is enabled (config: ai_analysis.enabled: true), the workflow uses a two-stage AI system:
-
-  **Stage 1: Cost-Optimized Filtering**
-  - Only analyzes jobs with criteria score >= 70 (saves ~60% on AI costs)
-  - Uses Claude Haiku for fast, cheap analysis (~$0.0017/job)
-  - Returns AI score, reasoning, fit summary, concerns, recommendation
-
-  **Stage 2: Professional Hiring Summary**
-  - Top 1-3 positions curated by Claude Sonnet (~$0.024/summary)
-  - Concise, Telegram-friendly format
-  - Includes notification history and freshness indicators
-  - One message per run with best opportunities
-
-  **Configuration (in jobhunter-service.yaml):**
-  - `prescreen_threshold: 70` - Only AI-analyze jobs with criteria score >= this
-  - `min_score_threshold: 60` - Only notify if AI score >= this
-  - `send_individual_notifications: false` - Send summary only (true = summary + individual)
-  - `cost_limit_daily: 5.00` - Daily budget limit
-  - `cv_path` - Path to your CV for comparison
-
-  **Typical Costs:**
-  - Per run: ~$0.044 (12 jobs × $0.0017 + $0.024 summary)
-  - 3 runs/day: ~$0.13/day = ~$4/month
-
-**🚧 COMING SOON (Phase 4.5)**
-
-**Authentication:**
-• `set-credentials <company_id> <username> <password>` - For login-protected pages
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**💡 QUICK START GUIDE**
-
-**Step 1: Add Companies**
-   @jobhunter-service add-company Anthropic https://www.anthropic.com/careers/jobs
-   @jobhunter-service list-companies
-
-**Step 2: Define Your Criteria**
-
-   Simple keywords:
-   @jobhunter-service add-criteria remote simple 15
-   @jobhunter-service add-criteria python simple 20
-   @jobhunter-service add-criteria fastapi simple 10
-
-   Location preferences (group-any = match ANY):
-   @jobhunter-service add-criteria geography group-any 15
-   @jobhunter-service add-criteria-value geography "US West"
-   @jobhunter-service add-criteria-value geography "Remote"
-   @jobhunter-service add-criteria-value geography "Latin America"
-
-   Salary ranges (group-tiered = match by preference):
-   @jobhunter-service add-criteria salary group-tiered 0
-   @jobhunter-service add-criteria-value salary "300k+" preferred 30
-   @jobhunter-service add-criteria-value salary "200k-300k" preferred 25
-   @jobhunter-service add-criteria-value salary "150k-200k" acceptable 10
-   @jobhunter-service add-criteria-value salary "150k-" undesirable -15
-
-**Step 3: Test Your Setup**
-   @jobhunter-service test-criteria Engineering Manager - Remote - $350k - Python
-   @jobhunter-service list-criteria
-
-**Step 4: Run the Complete Workflow**
-
-   a) Light scrape (fast - gets job listings):
-      @jobhunter-service scrape-company 1
-      Result: 300+ jobs with titles, URLs, locations
-
-   b) Score and filter:
-      @jobhunter-service score-jobs 50 60
-      Result: See top matches (thresholds configurable in YAML)
-
-   c) Deep scrape matches (slow - gets full details):
-      @jobhunter-service deep-match 70 10
-      Result: Full descriptions + salaries for top 10 jobs
-
-   d) Review detailed matches:
-      @jobhunter-service score-jobs 20 70
-
-**📊 Two-Phase Scraping Strategy:**
-- **Phase 1 (Light):** 1 request → 300+ jobs (title, URL, location)
-- **Phase 2 (Deep):** ~10 requests → 10 matched jobs (full details)
-- **Efficiency:** 96% fewer requests, polite to servers
-
-**🎯 Current Status:**
-✅ Company Management (Phase 1-2)
-✅ Criteria Management with Ranges (Phase 3-3.5)
-✅ Web Scraping - Light Scrape (Phase 4)
-✅ Job Filtering & Scoring (Phase 5)
-✅ Deep Scraping - Selective (Phase 5.5)
-✅ Automated Scheduler (Phase 6)
-🚧 Schedule Management (Phase 7)
-🚧 Authentication (Phase 4.5)
-🚧 Freshness Detection (Phase 8)
-🚧 Notifications (Phase 9)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**📚 Documentation:**
-See `docs/ADR-005-jobhunter-service.md` for full architecture details
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-**📝 NOTES**
-
-• **Command names:** Multi-word names use underscores (e.g., Y_Combinator, Meta-Platforms)
-• **Quoted values:** Use quotes for multi-word criteria values (e.g., "US West", "Sales Engineering")
-• **Scraper types:** generic (default, works for most sites), greenhouse, lever, workday
-• **Score thresholds:** 70+ = high priority, 60-69 = good match, <60 = review carefully
-• **Deep scrape timing:** ~2 seconds per job (be patient with large batches)
-• **Database:** All jobs, criteria, and scores persist in SQLite
-• **Salary extraction:** Automatically parses ranges like "$200k-300k" from job descriptions
-
-**🔮 Coming Soon:**
-• Automated scheduling (run daily at specific times)
-• Telegram notifications for new matches
-• Freshness detection (prioritize newly posted jobs)
-• AI-powered semantic matching with Claude API
-
-**🔗 Documentation:** See docs/ADR-005-jobhunter-service.md for full architecture details
+**Notes:**
+• Multi-word company names use underscores: `Y_Combinator`
+• Quote multi-word values: `"US West"`, `"Sales Engineering"`
+• Scores: 70+ high priority, 60-69 good match, <60 review carefully
         """.strip()
 
         self._send_response(sender, help_text, correlation_id=correlation_id)
@@ -1976,7 +1828,7 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self._send_response(sender, response, correlation_id=correlation_id)
 
             # Run the workflow in the current thread (blocking)
-            self._run_daily_scrape()
+            self._run_daily_scrape(trigger_type='manual')
 
             # Send completion message
             final_response = "\n✅ **Workflow Complete!**\n"
@@ -2631,6 +2483,103 @@ See `docs/ADR-005-jobhunter-service.md` for full architecture details
             self._send_error_response(
                 sender, f"Failed to load CV: {str(e)}", correlation_id=correlation_id
             )
+
+    # ============================================================================
+    # Run History Commands
+    # ============================================================================
+
+    def _handle_history(self, sender: str, args: List[str], correlation_id: str = None):
+        """Show recent run history as a table."""
+        limit = 10
+        if args:
+            try:
+                limit = max(1, min(int(args[0]), 50))
+            except ValueError:
+                pass
+
+        runs = self.db_manager.get_runs(limit=limit)
+        if not runs:
+            self._send_response(sender, "No run history found. Use `run-now` to start a workflow.", correlation_id=correlation_id)
+            return
+
+        lines = [f"**Run History** (last {len(runs)})\n"]
+        lines.append("| ID | Date | Trigger | Status | Jobs | New | Matches | AI Ok | Duration |")
+        lines.append("|-----|------|---------|--------|------|-----|---------|-------|----------|")
+        for r in runs:
+            date_str = r['run_date'][:16].replace('T', ' ') if r['run_date'] else '—'
+            dur = f"{r['duration_seconds']:.0f}s" if r['duration_seconds'] else '—'
+            lines.append(
+                f"| {r['id']} | {date_str} | {r['trigger_type']} | {r['status']} "
+                f"| {r['jobs_found']} | {r['new_jobs']} | {r['matches']} "
+                f"| {r['ai_approved']} | {dur} |"
+            )
+
+        self._send_response(sender, '\n'.join(lines), correlation_id=correlation_id, content_type="text/markdown")
+
+    def _handle_last_run(self, sender: str, correlation_id: str = None):
+        """Show the full summary from the most recent completed run."""
+        run = self.db_manager.get_latest_run()
+        if not run:
+            self._send_response(sender, "No completed runs found yet.", correlation_id=correlation_id)
+            return
+
+        date_str = run['run_date'][:16].replace('T', ' ') if run['run_date'] else '—'
+        dur = f"{run['duration_seconds']:.0f}s" if run['duration_seconds'] else '—'
+
+        response = f"**Last Run** (#{run['id']} — {date_str}, {run['trigger_type']}, {dur})\n\n"
+        response += f"Jobs: {run['jobs_found']} found, {run['new_jobs']} new, {run['matches']} matches, {run['ai_approved']} AI approved\n\n"
+
+        if run['summary_text']:
+            response += f"---\n\n{run['summary_text']}"
+        else:
+            response += "_No AI summary for this run._"
+
+        self._send_response(sender, response, correlation_id=correlation_id, content_type="text/markdown")
+
+    def _handle_run_detail(self, sender: str, args: List[str], correlation_id: str = None):
+        """Show full details for a specific run by ID."""
+        if not args:
+            self._send_error_response(sender, "Usage: `run-detail <id>`", correlation_id=correlation_id)
+            return
+
+        try:
+            run_id = int(args[0])
+        except ValueError:
+            self._send_error_response(sender, "Invalid run ID. Must be a number.", correlation_id=correlation_id)
+            return
+
+        run = self.db_manager.get_run(run_id)
+        if not run:
+            self._send_error_response(sender, f"Run #{run_id} not found.", correlation_id=correlation_id)
+            return
+
+        date_str = run['run_date'][:16].replace('T', ' ') if run['run_date'] else '—'
+        dur = f"{run['duration_seconds']:.1f}s" if run['duration_seconds'] else '—'
+
+        lines = [
+            f"**Run #{run['id']}**\n",
+            f"| Field | Value |",
+            f"|-------|-------|",
+            f"| Date | {date_str} |",
+            f"| Trigger | {run['trigger_type']} |",
+            f"| Status | {run['status']} |",
+            f"| Companies | {run['companies_scraped']} |",
+            f"| Jobs Found | {run['jobs_found']} |",
+            f"| New Jobs | {run['new_jobs']} |",
+            f"| Matches | {run['matches']} |",
+            f"| Deep Scraped | {run['deep_scraped']} |",
+            f"| AI Analyzed | {run['ai_analyzed']} |",
+            f"| AI Approved | {run['ai_approved']} |",
+            f"| Duration | {dur} |",
+        ]
+
+        if run['error_message']:
+            lines.append(f"\n**Error:** {run['error_message']}")
+
+        if run['summary_text']:
+            lines.append(f"\n---\n\n**Summary:**\n\n{run['summary_text']}")
+
+        self._send_response(sender, '\n'.join(lines), correlation_id=correlation_id, content_type="text/markdown")
 
     # ============================================================================
     # Web Scraping (Phase 4)
@@ -4602,7 +4551,7 @@ Then provide your curated selections with detailed analysis."""
             self.logger.error(f"jobhunter-service: Error calculating next run: {e}")
             return None
 
-    def _run_daily_scrape(self):
+    def _run_daily_scrape(self, trigger_type: str = 'scheduled'):
         """
         Orchestrate the complete daily scraping workflow (Phase 6).
 
@@ -4612,8 +4561,10 @@ Then provide your curated selections with detailed analysis."""
         3. Deep scrape high-scoring matches
         4. Send notifications (Phase 9 - future)
         """
+        run_id = None
         try:
             start_time = time.time()
+            run_id = self.db_manager.create_run(trigger_type)
             self.logger.debug("=" * 60)
             self.logger.debug("jobhunter-service: 🚀 Starting Daily Scrape Workflow")
             self.logger.debug("=" * 60)
@@ -4784,6 +4735,7 @@ Then provide your curated selections with detailed analysis."""
             # Step 6: Send notifications (Phase 9)
             # With AI enabled, generate a curated summary (NO individual notifications)
             # Without AI, notify about all matched jobs (original behavior)
+            summary = None
             if self.ai_enabled and ai_approved_jobs:
                 # Generate professional hiring assistant summary
                 summary = self._generate_hiring_summary(ai_approved_jobs)
@@ -4830,10 +4782,35 @@ Then provide your curated selections with detailed analysis."""
             self.logger.info(f"jobhunter-service:    • Time elapsed: {elapsed/60:.1f} minutes")
             self.logger.info("=" * 60)
 
+            # Persist run results
+            if run_id:
+                ai_analyzed_count = len(ai_approved_jobs) if self.ai_enabled else 0
+                self.db_manager.update_run(
+                    run_id,
+                    status='completed',
+                    companies_scraped=len(companies),
+                    jobs_found=total_jobs_scraped,
+                    new_jobs=total_new_jobs,
+                    matches=len(matched_jobs),
+                    deep_scraped=len(deep_scraped_jobs),
+                    ai_analyzed=ai_analyzed_count,
+                    ai_approved=len(ai_approved_jobs) if self.ai_enabled else 0,
+                    summary_text=summary if self.ai_enabled and ai_approved_jobs else None,
+                    duration_seconds=elapsed
+                )
+
         except Exception as e:
+            elapsed = time.time() - start_time if 'start_time' in locals() else 0
             self.logger.error(f"jobhunter-service: Error in daily scrape workflow: {e}")
             import traceback
             self.logger.error(f"jobhunter-service: Traceback: {traceback.format_exc()}")
+            if run_id:
+                self.db_manager.update_run(
+                    run_id,
+                    status='failed',
+                    error_message=str(e),
+                    duration_seconds=elapsed
+                )
 
     # ============================================================================
     # Freshness Detection (Phase 8)

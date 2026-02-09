@@ -386,8 +386,11 @@ class TestJobHunterMessageHandling:
         assert response.metadata.target_service == "test-service"
         assert "JobHunter Service" in response.payload["content"]
         assert "add-company" in response.payload["content"]
-        assert "AVAILABLE COMMANDS" in response.payload["content"]
-        assert "QUICK START GUIDE" in response.payload["content"]
+        assert "score-jobs" in response.payload["content"]
+        assert "history" in response.payload["content"]
+        assert "last-run" in response.payload["content"]
+        assert "run-detail" in response.payload["content"]
+        assert "analyze-job" in response.payload["content"]
 
     def test_add_company_command(self, service):
         """Test add-company command."""
@@ -3456,3 +3459,139 @@ class TestParsers:
         )
 
         assert service._scrape_generic_html.called
+
+
+class TestRunHistoryCommands:
+    """Test run history commands: history, last-run, run-detail."""
+
+    @pytest.fixture
+    def temp_db(self):
+        temp_dir = tempfile.gettempdir()
+        temp_path = os.path.join(temp_dir, f"test_jh_history_{os.getpid()}_{time.time()}.db")
+        yield temp_path
+        Path(temp_path).unlink(missing_ok=True)
+
+    @pytest.fixture
+    def service(self, temp_db):
+        config = {
+            'database_path': temp_db,
+            'default_criteria': [],
+            'default_schedules': []
+        }
+        svc = JobHunterService("jobhunter-service", config)
+        svc.start_service()
+        yield svc
+        svc.stop_service()
+
+    @pytest.fixture
+    def db_manager(self, service):
+        return service.db_manager
+
+    def _send_command(self, service, command_text):
+        """Send a command to the service and return the response content."""
+        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        metadata = MessageMetadata(
+            sender_service="test-service",
+            target_service="jobhunter-service",
+            priority=MessagePriority.NORMAL,
+            correlation_id="test-hist"
+        )
+        message = SecureMessage(
+            payload={"content": command_text},
+            metadata=metadata
+        )
+        service.message_queues.inbound_queue.put_nowait(message)
+        time.sleep(0.5)
+        if not service.message_queues.outbound_queue.empty():
+            response = service.message_queues.outbound_queue.get_nowait()
+            return response.payload.get("content", "")
+        return None
+
+    def test_history_empty(self, service):
+        """History with no runs shows helpful message."""
+        content = self._send_command(service, "history")
+        assert content is not None
+        assert "No run history" in content
+
+    def test_history_with_runs(self, service, db_manager):
+        """History shows run table after creating runs."""
+        run_id = db_manager.create_run('manual')
+        db_manager.update_run(run_id, status='completed', jobs_found=50,
+                              new_jobs=5, matches=3, ai_approved=1, duration_seconds=12.5)
+        content = self._send_command(service, "history")
+        assert content is not None
+        assert "Run History" in content
+        assert "manual" in content
+        assert "completed" in content
+
+    def test_history_respects_limit(self, service, db_manager):
+        """History limit parameter controls number of rows."""
+        for i in range(5):
+            rid = db_manager.create_run('scheduled')
+            db_manager.update_run(rid, status='completed', jobs_found=i)
+        content = self._send_command(service, "history 2")
+        assert content is not None
+        # Should have header + 2 data rows (not 5)
+        lines = [l for l in content.split('\n') if '|' in l and 'Run History' not in l]
+        # 2 header rows (header + separator) + 2 data rows = 4
+        assert len(lines) == 4
+
+    def test_last_run_empty(self, service):
+        """Last-run with no runs shows helpful message."""
+        content = self._send_command(service, "last-run")
+        assert content is not None
+        assert "No completed runs" in content
+
+    def test_last_run_shows_summary(self, service, db_manager):
+        """Last-run shows the most recent completed run."""
+        run_id = db_manager.create_run('manual')
+        db_manager.update_run(run_id, status='completed', jobs_found=100,
+                              new_jobs=10, matches=5, ai_approved=2,
+                              duration_seconds=30.0, summary_text="Found great jobs!")
+        content = self._send_command(service, "last-run")
+        assert content is not None
+        assert "Last Run" in content
+        assert "Found great jobs!" in content
+        assert "100" in content  # jobs_found
+
+    def test_last_run_ignores_running(self, service, db_manager):
+        """Last-run only shows completed runs, not running ones."""
+        run_id = db_manager.create_run('manual')
+        # Don't complete it — status stays 'running'
+        content = self._send_command(service, "last-run")
+        assert content is not None
+        assert "No completed runs" in content
+
+    def test_run_detail_missing_id(self, service):
+        """Run-detail without ID shows usage."""
+        content = self._send_command(service, "run-detail")
+        assert content is not None
+        assert "Usage" in content or "run-detail" in content
+
+    def test_run_detail_not_found(self, service):
+        """Run-detail with non-existent ID shows error."""
+        content = self._send_command(service, "run-detail 999")
+        assert content is not None
+        assert "not found" in content
+
+    def test_run_detail_shows_full_info(self, service, db_manager):
+        """Run-detail shows all fields for a specific run."""
+        run_id = db_manager.create_run('scheduled')
+        db_manager.update_run(run_id, status='completed', companies_scraped=3,
+                              jobs_found=200, new_jobs=15, matches=8,
+                              deep_scraped=5, ai_analyzed=4, ai_approved=2,
+                              duration_seconds=45.3, summary_text="AI found 2 strong matches")
+        content = self._send_command(service, f"run-detail {run_id}")
+        assert content is not None
+        assert f"Run #{run_id}" in content
+        assert "scheduled" in content
+        assert "200" in content  # jobs_found
+        assert "AI found 2 strong matches" in content
+
+    def test_run_detail_with_error(self, service, db_manager):
+        """Run-detail shows error message if run failed."""
+        run_id = db_manager.create_run('manual')
+        db_manager.update_run(run_id, status='failed', error_message="Connection timeout")
+        content = self._send_command(service, f"run-detail {run_id}")
+        assert content is not None
+        assert "Connection timeout" in content

@@ -276,6 +276,32 @@ class JobHunterDatabaseManager:
                 # Add analysis_type column to ai_analysis_log for distinguishing summary vs job analysis
                 self._add_column_if_not_exists(conn, 'ai_analysis_log', 'analysis_type', 'TEXT DEFAULT "job"')
 
+                # Table 11: Run history (persist workflow output for recall)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS run_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        run_date TEXT NOT NULL,                 -- ISO format
+                        trigger_type TEXT NOT NULL,             -- 'manual' or 'scheduled'
+                        status TEXT NOT NULL DEFAULT 'running', -- running, completed, failed
+                        companies_scraped INTEGER DEFAULT 0,
+                        jobs_found INTEGER DEFAULT 0,
+                        new_jobs INTEGER DEFAULT 0,
+                        matches INTEGER DEFAULT 0,
+                        deep_scraped INTEGER DEFAULT 0,
+                        ai_analyzed INTEGER DEFAULT 0,
+                        ai_approved INTEGER DEFAULT 0,
+                        summary_text TEXT,                      -- Full hiring summary text
+                        error_message TEXT,                     -- Error details if failed
+                        duration_seconds REAL,
+                        created_date TEXT DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_run_history_run_date
+                    ON run_history(run_date)
+                """)
+
                 self.logger.info("Database schema initialized successfully")
 
         except Exception as e:
@@ -1230,3 +1256,61 @@ class JobHunterDatabaseManager:
             """, (min_score, limit))
 
             return [dict(row) for row in cursor.fetchall()]
+
+    # ============================================================================
+    # Run History
+    # ============================================================================
+
+    def create_run(self, trigger_type: str = 'manual') -> int:
+        """Create a new run history record. Returns the run id."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                INSERT INTO run_history (run_date, trigger_type, status)
+                VALUES (?, ?, 'running')
+            """, (datetime.now(timezone.utc).isoformat(), trigger_type))
+            return cursor.lastrowid
+
+    def update_run(self, run_id: int, **kwargs) -> None:
+        """Update a run record with the given fields."""
+        allowed = {
+            'status', 'companies_scraped', 'jobs_found', 'new_jobs',
+            'matches', 'deep_scraped', 'ai_analyzed', 'ai_approved',
+            'summary_text', 'error_message', 'duration_seconds'
+        }
+        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        if not fields:
+            return
+        set_clause = ', '.join(f'{k} = ?' for k in fields)
+        values = list(fields.values()) + [run_id]
+        with self._get_connection() as conn:
+            conn.execute(
+                f"UPDATE run_history SET {set_clause} WHERE id = ?",
+                values
+            )
+
+    def get_run(self, run_id: int) -> Optional[Dict[str, Any]]:
+        """Get a single run by id."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM run_history WHERE id = ?", (run_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_runs(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get recent runs, newest first."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM run_history ORDER BY run_date DESC LIMIT ?",
+                (limit,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_latest_run(self) -> Optional[Dict[str, Any]]:
+        """Get the most recent completed run."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM run_history WHERE status = 'completed' ORDER BY run_date DESC LIMIT 1"
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
