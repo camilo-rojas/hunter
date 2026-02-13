@@ -50,6 +50,7 @@ from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
 from robotray.core.messaging import SecureMessage, MessagePriority
 from robotray.core.secrets_manager import SecretsManager
+from robotray.utils.secret_helper import get_secret_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,10 @@ class JobHunterService(BaseService):
             except Exception as e:
                 self.logger.error(f"jobhunter-service: Failed to initialize AI client: {e}")
                 self.ai_enabled = False
+
+        # Per-user client cache (ADR-006)
+        self._clients = {}  # user_id -> Anthropic client
+        self._user_db = None  # Lazy-initialized
 
         # Initialize database manager (will be initialized during start_service)
         self.db_manager: Optional[JobHunterDatabaseManager] = None
@@ -3968,12 +3973,35 @@ class JobHunterService(BaseService):
     # AI Analysis Methods (Phase 11)
     # ============================================================================
 
-    def _call_anthropic_with_retry(self, **kwargs) -> Any:
+    def _get_user_db(self):
+        """Lazy-initialize UserDatabaseManager for per-user secret lookups."""
+        if self._user_db is None:
+            from robotray.auth.user_db import UserDatabaseManager
+            self._user_db = UserDatabaseManager()
+        return self._user_db
+
+    def _get_client(self, user_id: int = 0) -> Anthropic:
+        """Get Anthropic client for a user (per-user key or global fallback)."""
+        if user_id and user_id not in self._clients:
+            api_key = get_secret_for_user(
+                "anthropic_api_key",
+                user_id=user_id,
+                user_db=self._get_user_db(),
+                secrets_manager=self.secrets_manager,
+            )
+            if api_key:
+                self._clients[user_id] = Anthropic(api_key=api_key)
+            else:
+                return self.anthropic_client  # Fall back to global client
+        return self._clients.get(user_id, self.anthropic_client)
+
+    def _call_anthropic_with_retry(self, user_id: int = 0, **kwargs) -> Any:
         """Call Anthropic API with retry on 529 overloaded errors."""
+        client = self._get_client(user_id)
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                return self.anthropic_client.messages.create(**kwargs)
+                return client.messages.create(**kwargs)
             except APIStatusError as e:
                 if e.status_code == 529 and attempt < max_retries - 1:
                     wait = 30 * (attempt + 1)
