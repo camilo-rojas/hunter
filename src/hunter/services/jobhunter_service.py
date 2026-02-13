@@ -44,7 +44,7 @@ from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from pathlib import Path
 
-from anthropic import Anthropic
+from anthropic import Anthropic, APIStatusError
 
 from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
@@ -3968,6 +3968,23 @@ class JobHunterService(BaseService):
     # AI Analysis Methods (Phase 11)
     # ============================================================================
 
+    def _call_anthropic_with_retry(self, **kwargs) -> Any:
+        """Call Anthropic API with retry on 529 overloaded errors."""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                return self.anthropic_client.messages.create(**kwargs)
+            except APIStatusError as e:
+                if e.status_code == 529 and attempt < max_retries - 1:
+                    wait = 30 * (attempt + 1)
+                    self.logger.warning(
+                        f"jobhunter-service: Anthropic API overloaded (529), "
+                        f"retry {attempt + 1}/{max_retries} in {wait}s..."
+                    )
+                    time.sleep(wait)
+                else:
+                    raise
+
     def _analyze_job_with_cv(self, job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Analyze job using Claude API comparing against criteria and CV (Phase 11).
@@ -4059,7 +4076,7 @@ Respond in JSON format:
 
             # Call Claude API
             self.logger.debug(f"jobhunter-service: Calling Claude API for job {job.get('id', 'unknown')}...")
-            response = self.anthropic_client.messages.create(
+            response = self._call_anthropic_with_retry(
                 model=self.ai_model,
                 max_tokens=self.ai_max_tokens,
                 temperature=self.ai_temperature,
@@ -4375,7 +4392,7 @@ Then provide your curated selections with detailed analysis."""
             # Call Claude Sonnet for the summary
             self.logger.debug(f"jobhunter-service: Generating hiring summary with {self.ai_summary_model} for {len(approved_jobs)} jobs...")
 
-            response = self.anthropic_client.messages.create(
+            response = self._call_anthropic_with_retry(
                 model=self.ai_summary_model,
                 max_tokens=self.ai_summary_max_tokens,
                 temperature=0.5,  # Slightly higher for more natural writing
