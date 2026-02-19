@@ -44,7 +44,7 @@ from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from pathlib import Path
 
-from anthropic import Anthropic, APIStatusError
+from anthropic import Anthropic, APIStatusError, NotFoundError
 
 from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
@@ -92,7 +92,7 @@ class JobHunterService(BaseService):
         # AI Analysis Configuration (Phase 11)
         ai_config = self.config.get('ai_analysis', {})
         self.ai_enabled = ai_config.get('enabled', False)
-        self.ai_model = ai_config.get('model', 'claude-3-5-haiku-20241022')
+        self.ai_model = ai_config.get('model', 'claude-haiku-4-5-20251001')
         self.ai_summary_model = ai_config.get('summary_model', 'claude-sonnet-4-20250514')  # Sonnet for final summary
         self.ai_max_tokens = ai_config.get('max_tokens', 1000)
         self.ai_summary_max_tokens = ai_config.get('summary_max_tokens', 2000)  # More tokens for summary
@@ -4002,6 +4002,15 @@ class JobHunterService(BaseService):
         for attempt in range(max_retries):
             try:
                 return client.messages.create(**kwargs)
+            except NotFoundError as e:
+                # Model deprecated/removed — disable AI for this session to avoid log spam
+                model = kwargs.get('model', 'unknown')
+                self.logger.error(
+                    f"jobhunter-service: Model '{model}' not found (deprecated?). "
+                    f"Disabling AI analysis for this session. Update the model in config."
+                )
+                self.ai_enabled = False
+                raise
             except APIStatusError as e:
                 if e.status_code == 529 and attempt < max_retries - 1:
                     wait = 30 * (attempt + 1)
@@ -4229,8 +4238,8 @@ Respond in JSON format:
         """
         Calculate cost of AI API call.
 
-        Pricing (as of 2025):
-        - claude-3-5-haiku-20241022: Input $0.25/1M, Output $1.25/1M
+        Pricing (as of 2026):
+        - claude-haiku-4-5-20251001: Input $0.25/1M, Output $1.25/1M
         - claude-sonnet-4-20250514: Input $3/1M, Output $15/1M
 
         Args:
