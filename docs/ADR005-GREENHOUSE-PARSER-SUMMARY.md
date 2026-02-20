@@ -178,7 +178,7 @@ WHERE name = 'Anthropic';
 
 **When adding new companies:**
 ```
-@jobhunter-service add-company "OpenAI" "https://openai.com/careers" "greenhouse"
+@jobhunter add-company "OpenAI" "https://openai.com/careers" "greenhouse"
 ```
 
 #### 4. Bug Fix: scraper_type Parameter
@@ -237,7 +237,7 @@ jobs = self._scrape_company(
 
 #### 1. Configuration
 
-**New config parameter in `jobhunter-service.yaml`:**
+**New config parameter in `jobhunter.yaml`:**
 ```yaml
 config:
   # Logging configuration
@@ -255,7 +255,7 @@ self.verbose_logging = self.config.get('verbose_logging', False)
 **Pattern applied throughout codebase:**
 ```python
 if self.verbose_logging:
-    self.logger.info("jobhunter-service: Detailed progress message")
+    self.logger.info("jobhunter: Detailed progress message")
 ```
 
 **Always shown (regardless of verbose_logging):**
@@ -278,39 +278,39 @@ if self.verbose_logging:
 
 **Before:**
 ```python
-self.logger.info(f"jobhunter-service: 📋 Found {len(companies)} active companies")
-self.logger.info(f"jobhunter-service: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
-self.logger.info(f"jobhunter-service:    ✅ {len(jobs)} jobs found, {new_count} new")
+self.logger.info(f"jobhunter: 📋 Found {len(companies)} active companies")
+self.logger.info(f"jobhunter: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
+self.logger.info(f"jobhunter:    ✅ {len(jobs)} jobs found, {new_count} new")
 ```
 
 **After:**
 ```python
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service: 📋 Found {len(companies)} active companies")
+    self.logger.info(f"jobhunter: 📋 Found {len(companies)} active companies")
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
+    self.logger.info(f"jobhunter: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service:    ✅ {len(jobs)} jobs found, {new_count} new")
+    self.logger.info(f"jobhunter:    ✅ {len(jobs)} jobs found, {new_count} new")
 ```
 
 **Deep scraping: `_deep_scrape_matches()` (~3 statements conditional)**
 ```python
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service: Starting deep scrape for {total} matched jobs")
+    self.logger.info(f"jobhunter: Starting deep scrape for {total} matched jobs")
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service: Deep scraping {i}/{total}: {job.get('title', 'Unknown')}")
+    self.logger.info(f"jobhunter: Deep scraping {i}/{total}: {job.get('title', 'Unknown')}")
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service: Deep scrape complete: {success_count}/{total} successful")
+    self.logger.info(f"jobhunter: Deep scrape complete: {success_count}/{total} successful")
 ```
 
 **Individual job scraping: `_deep_scrape_job()` (~3 statements conditional)**
 ```python
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service: Deep scraping job {job_id}: {job_url}")
+    self.logger.info(f"jobhunter: Deep scraping job {job_id}: {job_url}")
 if self.verbose_logging:
-    self.logger.warning(f"jobhunter-service: Failed to fetch job {job_id}")
+    self.logger.warning(f"jobhunter: Failed to fetch job {job_id}")
 if self.verbose_logging:
-    self.logger.info(f"jobhunter-service: Successfully deep scraped job {job_id}")
+    self.logger.info(f"jobhunter: Successfully deep scraped job {job_id}")
 ```
 
 #### 4. Log Output Comparison
@@ -318,17 +318,17 @@ if self.verbose_logging:
 **With `verbose_logging: false` (DEFAULT):**
 ```
 ============================================================
-jobhunter-service: 🚀 Starting Daily Scrape Workflow
+jobhunter: 🚀 Starting Daily Scrape Workflow
 ============================================================
 
 ============================================================
-jobhunter-service: ✨ Daily Scrape Workflow Complete
-jobhunter-service:    • Companies scraped: 1
-jobhunter-service:    • Total jobs found: 62
-jobhunter-service:    • New jobs: 0
-jobhunter-service:    • High-scoring matches: 27
-jobhunter-service:    • Deep scraped: 20
-jobhunter-service:    • Time elapsed: 1.4 minutes
+jobhunter: ✨ Daily Scrape Workflow Complete
+jobhunter:    • Companies scraped: 1
+jobhunter:    • Total jobs found: 62
+jobhunter:    • New jobs: 0
+jobhunter:    • High-scoring matches: 27
+jobhunter:    • Deep scraped: 20
+jobhunter:    • Time elapsed: 1.4 minutes
 ============================================================
 ```
 
@@ -337,33 +337,33 @@ jobhunter-service:    • Time elapsed: 1.4 minutes
 **With `verbose_logging: true`:**
 ```
 ============================================================
-jobhunter-service: 🚀 Starting Daily Scrape Workflow
+jobhunter: 🚀 Starting Daily Scrape Workflow
 ============================================================
-jobhunter-service: 📋 Found 1 active companies
-jobhunter-service: 🔍 Scraping 1/1: Anthropic
-jobhunter-service: Using Greenhouse parser for https://...
-jobhunter-service: Greenhouse parser found 62 jobs
-jobhunter-service:    ✅ 62 jobs found, 0 new
-jobhunter-service:
+jobhunter: 📋 Found 1 active companies
+jobhunter: 🔍 Scraping 1/1: Anthropic
+jobhunter: Using Greenhouse parser for https://...
+jobhunter: Greenhouse parser found 62 jobs
+jobhunter:    ✅ 62 jobs found, 0 new
+jobhunter:
 📊 Light Scrape Summary: 62 total, 0 new jobs
-jobhunter-service:
+jobhunter:
 🎯 Scoring jobs against criteria...
-jobhunter-service:    ✅ 27 jobs scored >= 60
-jobhunter-service:
+jobhunter:    ✅ 27 jobs scored >= 60
+jobhunter:
 🔬 Deep scraping top 20 matches...
-jobhunter-service: Deep scraping 1/20: Senior Research Scientist...
-jobhunter-service: Deep scraping job 266: https://...
-jobhunter-service: Successfully deep scraped job 266
-jobhunter-service: Deep scraping 2/20: Technical Cyber Threat...
+jobhunter: Deep scraping 1/20: Senior Research Scientist...
+jobhunter: Deep scraping job 266: https://...
+jobhunter: Successfully deep scraped job 266
+jobhunter: Deep scraping 2/20: Technical Cyber Threat...
 [... 38 more lines ...]
 ============================================================
-jobhunter-service: ✨ Daily Scrape Workflow Complete
-jobhunter-service:    • Companies scraped: 1
-jobhunter-service:    • Total jobs found: 62
-jobhunter-service:    • New jobs: 0
-jobhunter-service:    • High-scoring matches: 27
-jobhunter-service:    • Deep scraped: 20
-jobhunter-service:    • Time elapsed: 1.4 minutes
+jobhunter: ✨ Daily Scrape Workflow Complete
+jobhunter:    • Companies scraped: 1
+jobhunter:    • Total jobs found: 62
+jobhunter:    • New jobs: 0
+jobhunter:    • High-scoring matches: 27
+jobhunter:    • Deep scraped: 20
+jobhunter:    • Time elapsed: 1.4 minutes
 ============================================================
 ```
 
@@ -432,7 +432,7 @@ jobhunter-service:    • Time elapsed: 1.4 minutes
 ```yaml
 # No config needed - set per-company in database
 # Example:
-@jobhunter-service add-company "Anthropic" "https://anthropic.com/careers" "greenhouse"
+@jobhunter add-company "Anthropic" "https://anthropic.com/careers" "greenhouse"
 ```
 
 **Verbose Logging:**
@@ -446,7 +446,7 @@ config:
 
 ## Documentation Updates
 
-1. ✅ **ADR005-jobhunter-service.md**
+1. ✅ **ADR005-jobhunter.md**
    - Updated scraping strategy section with Greenhouse implementation
    - Added verbose logging configuration section
    - Marked as "Phase 2 (Partial - Greenhouse Complete)"

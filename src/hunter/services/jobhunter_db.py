@@ -33,7 +33,7 @@ class JobHunterDatabaseManager:
     Follows the same pattern as IBDatabaseManager for consistency.
     """
 
-    def __init__(self, db_path: str = "data/jobhunter_service.db"):
+    def __init__(self, db_path: str = "data/jobhunter.db"):
         """Initialize the database manager."""
         self.db_path = db_path
         self.logger = logging.getLogger("robotray.service.jobhunter-db")

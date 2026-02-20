@@ -114,7 +114,7 @@ def test_service_lifecycle():
     print("="*60)
 
     # Load config
-    config_path = "config/services/jobhunter-service.yaml"
+    config_path = "config/services/jobhunter.yaml"
     with open(config_path, 'r') as f:
         service_config = yaml.safe_load(f)
 
@@ -127,7 +127,7 @@ def test_service_lifecycle():
     config['database_path'] = test_db
 
     # Initialize service
-    service = JobHunterService("jobhunter-service", config)
+    service = JobHunterService("jobhunter", config)
     print(f"✓ Service initialized")
 
     # Start service

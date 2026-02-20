@@ -139,7 +139,7 @@ def score_job(job_data, active_criteria, active_groups):
 
 ## 4. Configuration Enhancements
 
-**Added to `jobhunter-service.yaml`:**
+**Added to `jobhunter.yaml`:**
 
 ```yaml
 config:
@@ -219,22 +219,22 @@ _handle_test_criteria(sender, args, correlation_id)  # Tests individual + groupe
 
 ```bash
 # Create multi-value OR group
-@jobhunter-service add-group departments any 15
-@jobhunter-service add-group-value departments sales
-@jobhunter-service add-group-value departments marketing
+@jobhunter add-group departments any 15
+@jobhunter add-group-value departments sales
+@jobhunter add-group-value departments marketing
 
 # Create tiered geography group
-@jobhunter-service add-group geography tiered
-@jobhunter-service add-group-value geography "Latin America" preferred 20
-@jobhunter-service add-group-value geography Remote preferred 20
-@jobhunter-service add-group-value geography US_East acceptable 0
-@jobhunter-service add-group-value geography On-site_only undesirable -10
+@jobhunter add-group geography tiered
+@jobhunter add-group-value geography "Latin America" preferred 20
+@jobhunter add-group-value geography Remote preferred 20
+@jobhunter add-group-value geography US_East acceptable 0
+@jobhunter add-group-value geography On-site_only undesirable -10
 
 # List all groups with values
-@jobhunter-service list-groups
+@jobhunter list-groups
 
 # Test scoring with sample job text
-@jobhunter-service test-criteria "Senior Sales Engineer - Remote, Latin America - $150k"
+@jobhunter test-criteria "Senior Sales Engineer - Remote, Latin America - $150k"
 # Output:
 #   Individual Score: 45/100
 #   Grouped Score: +45 pts (departments:sales +15, geography:Latin America +20, ...)

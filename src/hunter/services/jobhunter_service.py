@@ -17,16 +17,16 @@ Features:
 - Database persistence for companies, jobs, matches, criteria, and schedules
 
 @ Routing Commands (to be implemented in phases):
-- @jobhunter-service help
-- @jobhunter-service add-company <name> <url> [scraper_type]
-- @jobhunter-service list-companies
-- @jobhunter-service set-criteria <type> <value> <weight>
-- @jobhunter-service list-criteria
-- @jobhunter-service add-schedule <time> [timezone]
-- @jobhunter-service list-schedules
-- @jobhunter-service run-now
-- @jobhunter-service matches [limit]
-- @jobhunter-service status
+- @jobhunter help
+- @jobhunter add-company <name> <url> [scraper_type]
+- @jobhunter list-companies
+- @jobhunter set-criteria <type> <value> <weight>
+- @jobhunter list-criteria
+- @jobhunter add-schedule <time> [timezone]
+- @jobhunter list-schedules
+- @jobhunter run-now
+- @jobhunter matches [limit]
+- @jobhunter status
 """
 
 import logging
@@ -68,13 +68,13 @@ class JobHunterService(BaseService):
         Initialize JobHunter service.
 
         Args:
-            name: Service name (usually "jobhunter-service")
+            name: Service name (usually "jobhunter")
             config: Service configuration
         """
         super().__init__(name, config)
 
         # Get configuration
-        db_path = self.config.get('database_path', 'data/jobhunter_service.db')
+        db_path = self.config.get('database_path', 'data/jobhunter.db')
         self.default_criteria = self.config.get('default_criteria', [])
         self.default_criterion_groups = self.config.get('default_criterion_groups', [])
         self.default_schedules = self.config.get('default_schedules', [])
@@ -116,7 +116,7 @@ class JobHunterService(BaseService):
 
         if self.ai_enabled:
             try:
-                # Get API key from SecretsManager (same as ai-service)
+                # Get API key from SecretsManager (same as ai)
                 self.secrets_manager = SecretsManager()
                 api_key = self.secrets_manager.get_secret("anthropic_api_key")
 
@@ -124,13 +124,13 @@ class JobHunterService(BaseService):
                     # Fallback to environment variable
                     api_key = os.getenv("ANTHROPIC_API_KEY")
                     self.logger.warning(
-                        "jobhunter-service: API key not found in SecretsManager, using environment variable"
+                        "jobhunter: API key not found in SecretsManager, using environment variable"
                     )
 
                 if api_key:
                     self.anthropic_client = Anthropic(api_key=api_key)
                     self.logger.info(
-                        f"jobhunter-service: AI analysis enabled with model {self.ai_model}, "
+                        f"jobhunter: AI analysis enabled with model {self.ai_model}, "
                         f"min score threshold: {self.ai_min_score}"
                     )
 
@@ -138,12 +138,12 @@ class JobHunterService(BaseService):
                     if self.cv_path.exists():
                         self._cv_content = self.cv_path.read_text()
                         self.logger.info(
-                            f"jobhunter-service: CV loaded from {self.cv_path} "
+                            f"jobhunter: CV loaded from {self.cv_path} "
                             f"({len(self._cv_content)} characters)"
                         )
                     else:
                         self.logger.warning(
-                            f"jobhunter-service: CV not found at {self.cv_path}, "
+                            f"jobhunter: CV not found at {self.cv_path}, "
                             "AI analysis will work without CV context"
                         )
 
@@ -151,23 +151,23 @@ class JobHunterService(BaseService):
                     if self.goal_path.exists():
                         self._goal_content = self.goal_path.read_text().strip()
                         self.logger.info(
-                            f"jobhunter-service: Search goal loaded from {self.goal_path} "
+                            f"jobhunter: Search goal loaded from {self.goal_path} "
                             f"({len(self._goal_content)} characters)"
                         )
                     else:
                         self.logger.info(
-                            "jobhunter-service: No search goal found. "
-                            "Set one with: @jobhunter-service goal <your goal>"
+                            "jobhunter: No search goal found. "
+                            "Set one with: @jobhunter goal <your goal>"
                         )
                 else:
                     self.logger.error(
-                        "jobhunter-service: AI analysis enabled but no API key found. "
+                        "jobhunter: AI analysis enabled but no API key found. "
                         "Set via SecretsManager.set_secret('anthropic_api_key', 'sk-ant-...')"
                     )
                     self.ai_enabled = False
 
             except Exception as e:
-                self.logger.error(f"jobhunter-service: Failed to initialize AI client: {e}")
+                self.logger.error(f"jobhunter: Failed to initialize AI client: {e}")
                 self.ai_enabled = False
 
         # Per-user client cache (ADR-006)
@@ -183,7 +183,7 @@ class JobHunterService(BaseService):
         self._running = False
         self._shutdown_event = threading.Event()
 
-        self.logger.info(f"jobhunter-service: Initialized with database at {db_path}")
+        self.logger.info(f"jobhunter: Initialized with database at {db_path}")
 
     def start_service(self):
         """
@@ -196,10 +196,10 @@ class JobHunterService(BaseService):
         4. Starts the message loop (future phases)
         """
         try:
-            self.logger.info("jobhunter-service: Starting JobHunter service...")
+            self.logger.info("jobhunter: Starting JobHunter service...")
 
             # Initialize database
-            db_path = self.config.get('database_path', 'data/jobhunter_service.db')
+            db_path = self.config.get('database_path', 'data/jobhunter.db')
 
             # Check if database file exists (to determine if this is first run)
             is_first_run = not os.path.exists(db_path)
@@ -209,7 +209,7 @@ class JobHunterService(BaseService):
 
             # Initialize default criteria, groups, and schedules ONLY on first run
             if is_first_run:
-                self.logger.info("jobhunter-service: First run detected - initializing default criteria, groups, and schedules")
+                self.logger.info("jobhunter: First run detected - initializing default criteria, groups, and schedules")
 
                 if self.default_criteria:
                     self.db_manager.initialize_default_criteria(self.default_criteria)
@@ -220,13 +220,13 @@ class JobHunterService(BaseService):
                 if self.default_schedules:
                     self.db_manager.initialize_default_schedules(self.default_schedules)
             else:
-                self.logger.info("jobhunter-service: Existing database found - skipping default initialization")
+                self.logger.info("jobhunter: Existing database found - skipping default initialization")
 
             # Verify initialization
             criteria_count = len(self.db_manager.get_active_criteria())
             groups_count = len(self.db_manager.get_active_groups())
             schedule_count = len(self.db_manager.get_active_run_times())
-            self.logger.info(f"jobhunter-service: Database initialized: {criteria_count} criteria, {groups_count} groups, {schedule_count} schedules")
+            self.logger.info(f"jobhunter: Database initialized: {criteria_count} criteria, {groups_count} groups, {schedule_count} schedules")
 
             # Set service state
             self._running = True
@@ -239,7 +239,7 @@ class JobHunterService(BaseService):
                 daemon=True
             )
             self._message_thread.start()
-            self.logger.info("jobhunter-service: Message loop started")
+            self.logger.info("jobhunter: Message loop started")
 
             # Start scheduler thread (Phase 6)
             self._scheduler_thread = self.create_service_thread(
@@ -248,12 +248,12 @@ class JobHunterService(BaseService):
                 daemon=True
             )
             self._scheduler_thread.start()
-            self.logger.info("jobhunter-service: Scheduler loop started")
+            self.logger.info("jobhunter: Scheduler loop started")
 
-            self.logger.info("jobhunter-service: JobHunter service started successfully")
+            self.logger.info("jobhunter: JobHunter service started successfully")
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Failed to start JobHunter service: {e}")
+            self.logger.error(f"jobhunter: Failed to start JobHunter service: {e}")
             raise
 
     def stop_service(self):
@@ -266,7 +266,7 @@ class JobHunterService(BaseService):
         3. Cleans up resources
         """
         try:
-            self.logger.info("jobhunter-service: Stopping JobHunter service...")
+            self.logger.info("jobhunter: Stopping JobHunter service...")
 
             # Signal threads to stop
             self._running = False
@@ -276,14 +276,14 @@ class JobHunterService(BaseService):
             if self._message_thread and self._message_thread.is_alive():
                 self._message_thread.join(timeout=5.0)
                 if self._message_thread.is_alive():
-                    self.logger.warning("jobhunter-service: Message loop thread did not stop gracefully")
+                    self.logger.warning("jobhunter: Message loop thread did not stop gracefully")
 
             # TODO Phase 6: Stop scheduler thread
 
-            self.logger.info("jobhunter-service: JobHunter service stopped successfully")
+            self.logger.info("jobhunter: JobHunter service stopped successfully")
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error stopping JobHunter service: {e}")
+            self.logger.error(f"jobhunter: Error stopping JobHunter service: {e}")
             raise
 
     # ============================================================================
@@ -487,12 +487,12 @@ class JobHunterService(BaseService):
                     "active_criteria": criteria_count,
                     "active_schedules": schedule_count,
                     "active_companies": company_count,
-                    "database_path": self.config.get('database_path', 'data/jobhunter_service.db')
+                    "database_path": self.config.get('database_path', 'data/jobhunter.db')
                 }
             }
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Health check failed: {e}")
+            self.logger.error(f"jobhunter: Health check failed: {e}")
             return {
                 "status": "unhealthy",
                 "message": f"Health check failed: {str(e)}",
@@ -506,7 +506,7 @@ class JobHunterService(BaseService):
     def _message_loop(self):
         """Process incoming messages from message queue."""
         try:
-            self.logger.info("jobhunter-service: Starting message processing loop")
+            self.logger.info("jobhunter: Starting message processing loop")
 
             while self._running and not self._shutdown_event.is_set():
                 try:
@@ -519,15 +519,15 @@ class JobHunterService(BaseService):
                 except Exception as e:
                     # Log actual errors (not empty queue)
                     if str(e):  # Only log if there's an actual error message
-                        self.logger.error(f"jobhunter-service: Error in message loop: {e}")
+                        self.logger.error(f"jobhunter: Error in message loop: {e}")
                     threading.Event().wait(0.1)
 
-            self.logger.info("jobhunter-service: Message loop stopped")
+            self.logger.info("jobhunter: Message loop stopped")
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Critical error in message loop: {e}")
+            self.logger.error(f"jobhunter: Critical error in message loop: {e}")
             import traceback
-            self.logger.error(f"jobhunter-service: Traceback: {traceback.format_exc()}")
+            self.logger.error(f"jobhunter: Traceback: {traceback.format_exc()}")
 
     def _handle_message_sync(self, message):
         """Handle incoming message synchronously."""
@@ -558,8 +558,8 @@ class JobHunterService(BaseService):
             command = parts[0].lower()
             args = parts[1:] if len(parts) > 1 else []
 
-            self.logger.info(f"jobhunter-service: 📨 Processing '{command}' from {sender}{correlation_info}")
-            self.logger.debug(f"jobhunter-service: Command '{command}' has {len(args)} argument(s)")
+            self.logger.info(f"jobhunter: 📨 Processing '{command}' from {sender}{correlation_info}")
+            self.logger.debug(f"jobhunter: Command '{command}' has {len(args)} argument(s)")
 
             # Route to appropriate handler
             if command == "help":
@@ -624,14 +624,14 @@ class JobHunterService(BaseService):
             else:
                 self._send_error_response(
                     sender,
-                    f"Unknown command: {command}. Try '@jobhunter-service help' for available commands.",
+                    f"Unknown command: {command}. Try '@jobhunter help' for available commands.",
                     correlation_id=correlation_id
                 )
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error handling message: {e}")
+            self.logger.error(f"jobhunter: Error handling message: {e}")
             import traceback
-            self.logger.error(f"jobhunter-service: Traceback: {traceback.format_exc()}")
+            self.logger.error(f"jobhunter: Traceback: {traceback.format_exc()}")
 
     # ============================================================================
     # Command Handlers
@@ -644,7 +644,7 @@ class JobHunterService(BaseService):
 **Company Management:**
 • **add-company** `<name> <url> [scraper_type]` — Add company to monitor
   Types: generic (default), greenhouse, lever, ashby
-  Example: `@jobhunter-service add-company Anthropic https://www.anthropic.com/careers`
+  Example: `@jobhunter add-company Anthropic https://www.anthropic.com/careers`
 • **list-companies** — Show all tracked companies
 • **remove-company** `<id>` — Remove a company
 • **scrape-company** `<id>` — Manually scrape a company's career page
@@ -652,20 +652,20 @@ class JobHunterService(BaseService):
 **Search Criteria:**
 • **add-criteria** `<name> <type> [weight]` — Create a criterion
   Types: simple, group-any, group-all, group-tiered
-  Example: `@jobhunter-service add-criteria remote simple 15`
+  Example: `@jobhunter add-criteria remote simple 15`
 • **add-criteria-value** `<name> <value> [tier] [weight]` — Add value to group criterion
   Tiers (group-tiered only): preferred, acceptable, undesirable
   Ranges: `"200k+"`, `"100k-150k"`, `"5+"`
-  Example: `@jobhunter-service add-criteria-value salary "200k+" preferred 25`
+  Example: `@jobhunter add-criteria-value salary "200k+" preferred 25`
 • **list-criteria** — Show all criteria with IDs
 • **remove-criteria** `<id>` — Remove criterion by ID
 • **remove-criteria-value** `<name> <value>` — Remove value from group criterion
 • **test-criteria** `<job_text>` — Test scoring against sample text
-  Example: `@jobhunter-service test-criteria Senior Engineer - Remote - $250k`
+  Example: `@jobhunter test-criteria Senior Engineer - Remote - $250k`
 
 **Job Scoring & Matching:**
 • **score-jobs** `[limit] [min_score]` — Score jobs against criteria (default: 50, 0)
-  Example: `@jobhunter-service score-jobs 20 70`
+  Example: `@jobhunter score-jobs 20 70`
 • **score-jobs** `<job_id>` — Full details for a specific job
 • **deep-match** `[min_score] [limit]` — Deep scrape matched jobs (default: 60, 50)
 • **list-new-jobs** — Show newly detected jobs
@@ -674,7 +674,7 @@ class JobHunterService(BaseService):
 **Workflow & Scheduling:**
 • **run-now** — Trigger full workflow: scrape → score → deep-match → AI analysis
 • **add-schedule** `<HH:MM> [timezone]` — Add daily run time
-  Example: `@jobhunter-service add-schedule "09:00" "America/New_York"`
+  Example: `@jobhunter add-schedule "09:00" "America/New_York"`
 • **list-schedules** — Show scheduled run times
 • **remove-schedule** `<id>` — Remove a schedule
 
@@ -682,7 +682,7 @@ class JobHunterService(BaseService):
 • **history** `[limit]` — Recent run history table (default: 10)
 • **last-run** — Summary of the most recent completed run
 • **run-detail** `<id>` — Full details for a specific run
-  Example: `@jobhunter-service run-detail 5`
+  Example: `@jobhunter run-detail 5`
 
 **AI Analysis:** (requires `ai_analysis.enabled: true` in config)
 • **analyze-job** `<job_id>` — AI analysis vs CV + criteria + goal
@@ -693,7 +693,7 @@ class JobHunterService(BaseService):
 **Profile:**
 • **goal** — View current search goal
 • **goal** `<text>` — Set search goal (guides AI matching)
-  Example: `@jobhunter-service goal VP Sales at a startup, remote, 250k base`
+  Example: `@jobhunter goal VP Sales at a startup, remote, 250k base`
 • **load-cv** — Extract CV from PDF in `data/cv/` directory
 
 **Service:**
@@ -745,15 +745,15 @@ class JobHunterService(BaseService):
             response = f"✅ Added company: **{name}** (ID: {company_id})\n"
             response += f"📍 URL: {url}\n"
             response += f"🔧 Scraper: {scraper_type}\n\n"
-            response += f"Next: Run `@jobhunter-service run-now` to scrape immediately, or wait for next scheduled run."
+            response += f"Next: Run `@jobhunter run-now` to scrape immediately, or wait for next scheduled run."
 
             self._send_response(sender, response, correlation_id=correlation_id)
-            self.logger.info(f"jobhunter-service: Added company '{name}' (ID: {company_id})")
+            self.logger.info(f"jobhunter: Added company '{name}' (ID: {company_id})")
 
         except ValueError as e:
             self._send_error_response(sender, str(e), correlation_id=correlation_id)
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error adding company: {e}")
+            self.logger.error(f"jobhunter: Error adding company: {e}")
             self._send_error_response(
                 sender,
                 f"Failed to add company: {str(e)}",
@@ -767,7 +767,7 @@ class JobHunterService(BaseService):
 
             if not companies:
                 response = "📋 No companies configured.\n\n"
-                response += "Add companies with: `@jobhunter-service add-company \"Company Name\" \"https://example.com/careers\"`"
+                response += "Add companies with: `@jobhunter add-company \"Company Name\" \"https://example.com/careers\"`"
                 self._send_response(sender, response, correlation_id=correlation_id)
                 return
 
@@ -793,7 +793,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error listing companies: {e}")
+            self.logger.error(f"jobhunter: Error listing companies: {e}")
             self._send_error_response(
                 sender,
                 f"Failed to list companies: {str(e)}",
@@ -838,10 +838,10 @@ class JobHunterService(BaseService):
 
             response = f"✅ Removed company: **{company['name']}** (ID: {company_id})"
             self._send_response(sender, response, correlation_id=correlation_id)
-            self.logger.info(f"jobhunter-service: Removed company '{company['name']}' (ID: {company_id})")
+            self.logger.info(f"jobhunter: Removed company '{company['name']}' (ID: {company_id})")
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error removing company: {e}")
+            self.logger.error(f"jobhunter: Error removing company: {e}")
             self._send_error_response(
                 sender,
                 f"Failed to remove company: {str(e)}",
@@ -907,7 +907,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error getting status: {e}")
+            self.logger.error(f"jobhunter: Error getting status: {e}")
             self._send_error_response(
                 sender,
                 f"Failed to get status: {str(e)}",
@@ -943,9 +943,9 @@ class JobHunterService(BaseService):
                 metadata=metadata
             )
             self.message_queues.outbound_queue.put_nowait(message)
-            self.logger.debug(f"jobhunter-service: Sent response to {recipient} (type: {content_type})")
+            self.logger.debug(f"jobhunter: Sent response to {recipient} (type: {content_type})")
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Failed to send response: {e}")
+            self.logger.error(f"jobhunter: Failed to send response: {e}")
 
     def _send_error_response(self, recipient: str, error_message: str, correlation_id: str = None):
         """Send an error response message."""
@@ -1039,7 +1039,7 @@ class JobHunterService(BaseService):
         except ValueError as e:
             self._send_error_response(sender, f"❌ {str(e)}", correlation_id=correlation_id)
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error adding criterion: {e}")
+            self.logger.error(f"jobhunter: Error adding criterion: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to add criterion: {str(e)}", correlation_id=correlation_id)
@@ -1108,7 +1108,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error listing criteria: {e}")
+            self.logger.error(f"jobhunter: Error listing criteria: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to list criteria: {str(e)}", correlation_id=correlation_id)
@@ -1171,7 +1171,7 @@ class JobHunterService(BaseService):
                 )
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error removing criterion: {e}")
+            self.logger.error(f"jobhunter: Error removing criterion: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to remove criterion: {str(e)}", correlation_id=correlation_id)
@@ -1257,7 +1257,7 @@ class JobHunterService(BaseService):
         except ValueError as e:
             self._send_error_response(sender, f"❌ {str(e)}", correlation_id=correlation_id)
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error adding criterion value: {e}")
+            self.logger.error(f"jobhunter: Error adding criterion value: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to add criterion value: {str(e)}", correlation_id=correlation_id)
@@ -1311,7 +1311,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error removing criterion value: {e}")
+            self.logger.error(f"jobhunter: Error removing criterion value: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to remove criterion value: {str(e)}", correlation_id=correlation_id)
@@ -1365,10 +1365,10 @@ class JobHunterService(BaseService):
 
             # Extract numbers from job text once for efficiency
             extracted_numbers = self._extract_numbers_from_text(job_text)
-            self.logger.debug(f"jobhunter-service: DEBUG: Extracted numbers from text: {extracted_numbers}")
+            self.logger.debug(f"jobhunter: DEBUG: Extracted numbers from text: {extracted_numbers}")
 
             for group in groups:
-                self.logger.debug(f"jobhunter-service: DEBUG: Checking group '{group['name']}' (match_type={group['match_type']}, {len(group.get('values', []))} values)")
+                self.logger.debug(f"jobhunter: DEBUG: Checking group '{group['name']}' (match_type={group['match_type']}, {len(group.get('values', []))} values)")
                 if group['match_type'] == 'any':
                     # OR logic - match any value
                     for value_obj in group['values']:
@@ -1403,18 +1403,18 @@ class JobHunterService(BaseService):
                         # Check if value is a range pattern (Phase 3.5)
                         if self._is_range_pattern(value):
                             min_val, max_val = self._parse_range(value)
-                            self.logger.debug(f"jobhunter-service: DEBUG:   '{value}' is range → ({min_val}, {max_val})")
+                            self.logger.debug(f"jobhunter: DEBUG:   '{value}' is range → ({min_val}, {max_val})")
                             if self._matches_range(min_val, max_val, extracted_numbers):
-                                self.logger.debug(f"jobhunter-service: DEBUG:   MATCHED! Adding {int(tier_weight):+d} points")
+                                self.logger.debug(f"jobhunter: DEBUG:   MATCHED! Adding {int(tier_weight):+d} points")
                                 matched = True
                                 group_matches.append(f"{group['name']}: {value} [numeric match] ({tier}, {int(tier_weight):+d})")
                             else:
-                                self.logger.debug(f"jobhunter-service: DEBUG:   No match")
+                                self.logger.debug(f"jobhunter: DEBUG:   No match")
                         else:
                             # Fall back to substring matching
-                            self.logger.debug(f"jobhunter-service: DEBUG:   '{value}' is string, checking substring match")
+                            self.logger.debug(f"jobhunter: DEBUG:   '{value}' is string, checking substring match")
                             if value.lower() in job_text_lower:
-                                self.logger.debug(f"jobhunter-service: DEBUG:   MATCHED! Adding {int(tier_weight):+d} points")
+                                self.logger.debug(f"jobhunter: DEBUG:   MATCHED! Adding {int(tier_weight):+d} points")
                                 matched = True
                                 group_matches.append(f"{group['name']}: {value} ({tier}, {int(tier_weight):+d})")
 
@@ -1448,7 +1448,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error testing criteria: {e}")
+            self.logger.error(f"jobhunter: Error testing criteria: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to test criteria: {str(e)}", correlation_id=correlation_id)
@@ -1458,14 +1458,14 @@ class JobHunterService(BaseService):
         Handle scrape-company command - manually trigger scraping for a company.
 
         Usage:
-            @jobhunter-service scrape-company <company_id>
-            @jobhunter-service scrape-company <company_name>
+            @jobhunter scrape-company <company_id>
+            @jobhunter scrape-company <company_name>
         """
         try:
             if not args:
                 self._send_error_response(
                     sender,
-                    "❌ Missing company ID or name\n\nUsage: @jobhunter-service scrape-company <company_id|name>",
+                    "❌ Missing company ID or name\n\nUsage: @jobhunter scrape-company <company_id|name>",
                     correlation_id=correlation_id
                 )
                 return
@@ -1481,7 +1481,7 @@ class JobHunterService(BaseService):
                 # TODO: Add get_company_by_name method
                 self._send_error_response(
                     sender,
-                    f"❌ Company lookup by name not yet implemented. Please use company ID.\n\nTip: Use '@jobhunter-service list-companies' to see IDs",
+                    f"❌ Company lookup by name not yet implemented. Please use company ID.\n\nTip: Use '@jobhunter list-companies' to see IDs",
                     correlation_id=correlation_id
                 )
                 return
@@ -1518,13 +1518,13 @@ class JobHunterService(BaseService):
                         description=job.get('description')
                     )
                     saved_count += 1
-                    self.logger.debug(f"jobhunter-service: Saved job {job_id}: {job['title']}")
+                    self.logger.debug(f"jobhunter: Saved job {job_id}: {job['title']}")
                 except Exception as e:
                     if 'UNIQUE constraint' in str(e):
                         duplicate_count += 1
-                        self.logger.debug(f"jobhunter-service: Skipping duplicate: {job['title']}")
+                        self.logger.debug(f"jobhunter: Skipping duplicate: {job['title']}")
                     else:
-                        self.logger.error(f"jobhunter-service: Error saving job '{job['title']}': {e}")
+                        self.logger.error(f"jobhunter: Error saving job '{job['title']}': {e}")
 
             # Update company last_scraped timestamp
             self.db_manager.update_last_scraped(company['id'], len(jobs))
@@ -1548,7 +1548,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error scraping company: {e}")
+            self.logger.error(f"jobhunter: Error scraping company: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to scrape company: {str(e)}", correlation_id=correlation_id)
@@ -1558,8 +1558,8 @@ class JobHunterService(BaseService):
         Handle score-jobs command - score recent jobs against criteria.
 
         Usage:
-            @jobhunter-service score-jobs [limit] [min_score]
-            @jobhunter-service score-jobs <job_id>  # Show details for specific job
+            @jobhunter score-jobs [limit] [min_score]
+            @jobhunter score-jobs <job_id>  # Show details for specific job
         """
         try:
             # Check if first argument looks like a job ID (for detail view)
@@ -1642,7 +1642,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error scoring jobs: {e}")
+            self.logger.error(f"jobhunter: Error scoring jobs: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to score jobs: {str(e)}", correlation_id=correlation_id)
@@ -1736,7 +1736,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error showing job details: {e}")
+            self.logger.error(f"jobhunter: Error showing job details: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to show job details: {str(e)}", correlation_id=correlation_id)
@@ -1813,7 +1813,7 @@ class JobHunterService(BaseService):
                 correlation_id=correlation_id
             )
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error deep scraping matches: {e}")
+            self.logger.error(f"jobhunter: Error deep scraping matches: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to deep scrape: {str(e)}", correlation_id=correlation_id)
@@ -1827,7 +1827,7 @@ class JobHunterService(BaseService):
         """
         try:
             # Log at debug level - user already knows they triggered it
-            self.logger.debug("jobhunter-service: Manual workflow triggered by user")
+            self.logger.debug("jobhunter: Manual workflow triggered by user")
 
             response = "🚀 Starting job search workflow...\n"
             self._send_response(sender, response, correlation_id=correlation_id)
@@ -1842,7 +1842,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, final_response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error in manual run: {e}")
+            self.logger.error(f"jobhunter: Error in manual run: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to run workflow: {str(e)}", correlation_id=correlation_id)
@@ -1894,7 +1894,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error adding schedule: {e}")
+            self.logger.error(f"jobhunter: Error adding schedule: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to add schedule: {str(e)}", correlation_id=correlation_id)
@@ -1940,7 +1940,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error listing schedules: {e}")
+            self.logger.error(f"jobhunter: Error listing schedules: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to list schedules: {str(e)}", correlation_id=correlation_id)
@@ -1987,7 +1987,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error removing schedule: {e}")
+            self.logger.error(f"jobhunter: Error removing schedule: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to remove schedule: {str(e)}", correlation_id=correlation_id)
@@ -2050,7 +2050,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error listing new jobs: {e}")
+            self.logger.error(f"jobhunter: Error listing new jobs: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to list new jobs: {str(e)}", correlation_id=correlation_id)
@@ -2109,7 +2109,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error listing stale jobs: {e}")
+            self.logger.error(f"jobhunter: Error listing stale jobs: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to list stale jobs: {str(e)}", correlation_id=correlation_id)
@@ -2156,7 +2156,7 @@ class JobHunterService(BaseService):
                 return
 
             # Run AI analysis
-            self.logger.info(f"jobhunter-service: Running AI analysis on job {job_id}: {job.get('title')}")
+            self.logger.info(f"jobhunter: Running AI analysis on job {job_id}: {job.get('title')}")
             ai_result = self._analyze_job_with_cv(job)
 
             if not ai_result:
@@ -2201,7 +2201,7 @@ class JobHunterService(BaseService):
                 correlation_id=correlation_id
             )
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error analyzing job: {e}")
+            self.logger.error(f"jobhunter: Error analyzing job: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to analyze job: {str(e)}", correlation_id=correlation_id)
@@ -2257,7 +2257,7 @@ class JobHunterService(BaseService):
                 correlation_id=correlation_id
             )
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error getting AI stats: {e}")
+            self.logger.error(f"jobhunter: Error getting AI stats: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to get AI stats: {str(e)}", correlation_id=correlation_id)
@@ -2324,7 +2324,7 @@ class JobHunterService(BaseService):
                 correlation_id=correlation_id
             )
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error listing AI-approved jobs: {e}")
+            self.logger.error(f"jobhunter: Error listing AI-approved jobs: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             self._send_error_response(sender, f"Failed to list AI-approved jobs: {str(e)}", correlation_id=correlation_id)
@@ -2351,7 +2351,7 @@ class JobHunterService(BaseService):
                     response = (
                         "🎯 **No search goal set.**\n\n"
                         "Set your goal in first person to guide AI job matching:\n"
-                        "  @jobhunter-service goal Im looking for a VP Sales role "
+                        "  @jobhunter goal Im looking for a VP Sales role "
                         "at a frontier AI company, remote preferred..."
                     )
                 self._send_response(sender, response, correlation_id=correlation_id)
@@ -2368,7 +2368,7 @@ class JobHunterService(BaseService):
             self._goal_content = goal_text
 
             self.logger.info(
-                f"jobhunter-service: Search goal updated ({len(goal_text)} characters)"
+                f"jobhunter: Search goal updated ({len(goal_text)} characters)"
             )
 
             response = "🎯 **Search goal updated!**\n\n"
@@ -2380,7 +2380,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error handling goal command: {e}")
+            self.logger.error(f"jobhunter: Error handling goal command: {e}")
             self._send_error_response(
                 sender, f"Failed to handle goal: {str(e)}", correlation_id=correlation_id
             )
@@ -2412,7 +2412,7 @@ class JobHunterService(BaseService):
             pdf_path = max(pdf_files, key=lambda p: p.stat().st_mtime)
 
             self.logger.info(
-                f"jobhunter-service: Loading CV from {pdf_path.name}"
+                f"jobhunter: Loading CV from {pdf_path.name}"
             )
 
             # Extract text from PDF
@@ -2464,7 +2464,7 @@ class JobHunterService(BaseService):
             self._cv_content = md_content
 
             self.logger.info(
-                f"jobhunter-service: CV extracted from {pdf_path.name} -> "
+                f"jobhunter: CV extracted from {pdf_path.name} -> "
                 f"resume.md ({len(md_content)} characters, "
                 f"{len(text_parts)} pages)"
             )
@@ -2481,7 +2481,7 @@ class JobHunterService(BaseService):
             self._send_response(sender, response, correlation_id=correlation_id)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error loading CV: {e}")
+            self.logger.error(f"jobhunter: Error loading CV: {e}")
             import traceback
 
             self.logger.error(f"Traceback: {traceback.format_exc()}")
@@ -2614,11 +2614,11 @@ class JobHunterService(BaseService):
 
             can_fetch = rp.can_fetch(user_agent, base_url)
             if not can_fetch:
-                self.logger.warning(f"jobhunter-service: robots.txt disallows scraping: {base_url}")
+                self.logger.warning(f"jobhunter: robots.txt disallows scraping: {base_url}")
             return can_fetch
 
         except Exception as e:
-            self.logger.debug(f"jobhunter-service: Could not check robots.txt for {base_url}: {e}")
+            self.logger.debug(f"jobhunter: Could not check robots.txt for {base_url}: {e}")
             # If robots.txt doesn't exist or fails, assume allowed but log it
             return True
 
@@ -2645,7 +2645,7 @@ class JobHunterService(BaseService):
 
         for attempt in range(max_retries):
             try:
-                self.logger.debug(f"jobhunter-service: Fetching {url} (attempt {attempt + 1}/{max_retries})")
+                self.logger.debug(f"jobhunter: Fetching {url} (attempt {attempt + 1}/{max_retries})")
 
                 headers = {
                     'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
@@ -2660,11 +2660,11 @@ class JobHunterService(BaseService):
                 response = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
                 response.raise_for_status()
 
-                self.logger.debug(f"jobhunter-service: Successfully fetched {url} ({len(response.text)} bytes)")
+                self.logger.debug(f"jobhunter: Successfully fetched {url} ({len(response.text)} bytes)")
                 return response.text
 
             except requests.exceptions.Timeout:
-                self.logger.warning(f"jobhunter-service: Timeout fetching {url} (attempt {attempt + 1}/{max_retries})")
+                self.logger.warning(f"jobhunter: Timeout fetching {url} (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     sleep_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                     time.sleep(sleep_time)
@@ -2672,7 +2672,7 @@ class JobHunterService(BaseService):
                     raise
 
             except requests.exceptions.HTTPError as e:
-                self.logger.error(f"jobhunter-service: HTTP error fetching {url}: {e} (attempt {attempt + 1}/{max_retries})")
+                self.logger.error(f"jobhunter: HTTP error fetching {url}: {e} (attempt {attempt + 1}/{max_retries})")
                 if e.response.status_code >= 500:  # Retry on server errors
                     if attempt < max_retries - 1:
                         sleep_time = 2 ** attempt
@@ -2684,7 +2684,7 @@ class JobHunterService(BaseService):
                     raise
 
             except requests.exceptions.RequestException as e:
-                self.logger.error(f"jobhunter-service: Request error fetching {url}: {e} (attempt {attempt + 1}/{max_retries})")
+                self.logger.error(f"jobhunter: Request error fetching {url}: {e} (attempt {attempt + 1}/{max_retries})")
                 if attempt < max_retries - 1:
                     sleep_time = 2 ** attempt
                     time.sleep(sleep_time)
@@ -2725,7 +2725,7 @@ class JobHunterService(BaseService):
             for class_name in selector['class_']:
                 elements = soup.find_all(selector['tag'], class_=lambda x: x and class_name in x.lower() if x else False)
                 if elements:
-                    self.logger.debug(f"jobhunter-service: Found {len(elements)} job elements using selector {selector['tag']}.{class_name}")
+                    self.logger.debug(f"jobhunter: Found {len(elements)} job elements using selector {selector['tag']}.{class_name}")
                     job_elements.extend(elements)
                     break
             if job_elements:
@@ -2733,7 +2733,7 @@ class JobHunterService(BaseService):
 
         # Fallback: Look for direct job posting links (Greenhouse, Lever, Workday, etc.)
         if not job_elements:
-            self.logger.debug("jobhunter-service: No job elements found with standard selectors, looking for direct job links")
+            self.logger.debug("jobhunter: No job elements found with standard selectors, looking for direct job links")
 
             # Common job board platforms
             job_board_patterns = [
@@ -2820,13 +2820,13 @@ class JobHunterService(BaseService):
                 is_valid_url = any(pattern in job_url.lower() for pattern in valid_job_patterns)
 
                 if not is_valid_url:
-                    self.logger.debug(f"jobhunter-service: Skipping non-job URL: {title} ({job_url})")
+                    self.logger.debug(f"jobhunter: Skipping non-job URL: {title} ({job_url})")
                     continue
 
                 # Skip if title looks like a navigation link
                 skip_titles = ['careers', 'view all', 'see all', 'browse', 'apply']
                 if title.lower().strip() in skip_titles:
-                    self.logger.debug(f"jobhunter-service: Skipping navigation link: {title}")
+                    self.logger.debug(f"jobhunter: Skipping navigation link: {title}")
                     continue
 
                 # Create job dictionary
@@ -2839,14 +2839,14 @@ class JobHunterService(BaseService):
                 }
 
                 jobs.append(job)
-                self.logger.debug(f"jobhunter-service: Extracted job: {title}")
+                self.logger.debug(f"jobhunter: Extracted job: {title}")
 
             except Exception as e:
-                self.logger.warning(f"jobhunter-service: Error extracting job from element: {e}")
+                self.logger.warning(f"jobhunter: Error extracting job from element: {e}")
                 continue
 
         if self.verbose_logging:
-            self.logger.info(f"jobhunter-service: Extracted {len(jobs)} jobs from HTML")
+            self.logger.info(f"jobhunter: Extracted {len(jobs)} jobs from HTML")
         return jobs
 
     def _deep_scrape_job(self, job_id: int, job_url: str) -> bool:
@@ -2877,12 +2877,12 @@ class JobHunterService(BaseService):
 
             # Fetch job detail page with politeness delay (non-Greenhouse/Ashby/Lever)
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Deep scraping job {job_id}: {job_url}")
+                self.logger.info(f"jobhunter: Deep scraping job {job_id}: {job_url}")
             html = self._fetch_with_retry(job_url, politeness_delay=2.0)
 
             if not html:
                 if self.verbose_logging:
-                    self.logger.warning(f"jobhunter-service: Failed to fetch job {job_id}")
+                    self.logger.warning(f"jobhunter: Failed to fetch job {job_id}")
                 return False
 
             soup = BeautifulSoup(html, 'lxml')
@@ -2942,15 +2942,15 @@ class JobHunterService(BaseService):
                     salary_max=salary_max
                 )
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service: Successfully deep scraped job {job_id}")
+                    self.logger.info(f"jobhunter: Successfully deep scraped job {job_id}")
                 return True
             else:
                 if self.verbose_logging:
-                    self.logger.warning(f"jobhunter-service: No additional details extracted for job {job_id}")
+                    self.logger.warning(f"jobhunter: No additional details extracted for job {job_id}")
                 return False
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error deep scraping job {job_id}: {e}")
+            self.logger.error(f"jobhunter: Error deep scraping job {job_id}: {e}")
             return False
 
     def _deep_scrape_greenhouse_job(self, job_id: int, job_url: str) -> bool:
@@ -2981,7 +2981,7 @@ class JobHunterService(BaseService):
                 api_url = f"https://boards-api.greenhouse.io/v1/boards/{company_slug}/jobs/{greenhouse_job_id}"
 
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service: Fetching Greenhouse job details from API: {api_url}")
+                    self.logger.info(f"jobhunter: Fetching Greenhouse job details from API: {api_url}")
 
                 headers = {
                     'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
@@ -3033,21 +3033,21 @@ class JobHunterService(BaseService):
                         )
                         if self.verbose_logging:
                             self.logger.info(
-                                f"jobhunter-service: Greenhouse API returned {len(description)} chars for job {job_id}"
+                                f"jobhunter: Greenhouse API returned {len(description)} chars for job {job_id}"
                             )
                         return True
                     else:
-                        self.logger.warning(f"jobhunter-service: No content in Greenhouse API response for job {job_id}")
+                        self.logger.warning(f"jobhunter: No content in Greenhouse API response for job {job_id}")
                         return False
                 else:
-                    self.logger.warning(f"jobhunter-service: Greenhouse API returned {response.status_code} for job {job_id}")
+                    self.logger.warning(f"jobhunter: Greenhouse API returned {response.status_code} for job {job_id}")
                     return False
             else:
-                self.logger.warning(f"jobhunter-service: Could not parse Greenhouse URL: {job_url}")
+                self.logger.warning(f"jobhunter: Could not parse Greenhouse URL: {job_url}")
                 return False
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error deep scraping Greenhouse job {job_id}: {e}")
+            self.logger.error(f"jobhunter: Error deep scraping Greenhouse job {job_id}: {e}")
             return False
 
     def _deep_scrape_ashby_job(self, job_id: int, job_url: str) -> bool:
@@ -3068,12 +3068,12 @@ class JobHunterService(BaseService):
             import re
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Deep scraping Ashby job {job_id}: {job_url}")
+                self.logger.info(f"jobhunter: Deep scraping Ashby job {job_id}: {job_url}")
 
             # Fetch the job detail page
             html = self._fetch_with_retry(job_url, politeness_delay=2.0)
             if not html:
-                self.logger.warning(f"jobhunter-service: Failed to fetch Ashby job page {job_id}")
+                self.logger.warning(f"jobhunter: Failed to fetch Ashby job page {job_id}")
                 return False
 
             # Extract __appData JSON using brace counting (same as light scrape)
@@ -3082,7 +3082,7 @@ class JobHunterService(BaseService):
                 app_data_start = html.find('__appData')
 
             if app_data_start == -1:
-                self.logger.warning(f"jobhunter-service: No __appData found in Ashby job page {job_id}")
+                self.logger.warning(f"jobhunter: No __appData found in Ashby job page {job_id}")
                 return False
 
             # Find the opening brace
@@ -3106,7 +3106,7 @@ class JobHunterService(BaseService):
             try:
                 app_data = json.loads(json_str)
             except json.JSONDecodeError as e:
-                self.logger.warning(f"jobhunter-service: Failed to parse Ashby job JSON: {e}")
+                self.logger.warning(f"jobhunter: Failed to parse Ashby job JSON: {e}")
                 return False
 
             # Extract job description from the data
@@ -3169,18 +3169,18 @@ class JobHunterService(BaseService):
                 )
                 if self.verbose_logging:
                     self.logger.info(
-                        f"jobhunter-service: Ashby deep scrape returned {len(description)} chars for job {job_id}"
+                        f"jobhunter: Ashby deep scrape returned {len(description)} chars for job {job_id}"
                     )
                 return True
             else:
                 self.logger.warning(
-                    f"jobhunter-service: No valid description found in Ashby job page {job_id} "
+                    f"jobhunter: No valid description found in Ashby job page {job_id} "
                     f"(got {len(description) if description else 0} chars)"
                 )
                 return False
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error deep scraping Ashby job {job_id}: {e}")
+            self.logger.error(f"jobhunter: Error deep scraping Ashby job {job_id}: {e}")
             return False
 
     def _deep_scrape_lever_job(self, job_id: int, job_url: str) -> bool:
@@ -3204,7 +3204,7 @@ class JobHunterService(BaseService):
             from urllib.parse import urlparse
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Deep scraping Lever job {job_id}: {job_url}")
+                self.logger.info(f"jobhunter: Deep scraping Lever job {job_id}: {job_url}")
 
             # Extract company and job UUID from URL
             # URL format: https://jobs.lever.co/{company}/{job_uuid}
@@ -3212,7 +3212,7 @@ class JobHunterService(BaseService):
             path_parts = parsed.path.strip('/').split('/')
 
             if len(path_parts) < 2:
-                self.logger.warning(f"jobhunter-service: Could not parse Lever job URL: {job_url}")
+                self.logger.warning(f"jobhunter: Could not parse Lever job URL: {job_url}")
                 return False
 
             company_slug = path_parts[0]
@@ -3229,7 +3229,7 @@ class JobHunterService(BaseService):
             response = requests.get(api_url, headers=headers, timeout=30)
 
             if response.status_code != 200:
-                self.logger.warning(f"jobhunter-service: Lever API returned {response.status_code} for job {job_id}")
+                self.logger.warning(f"jobhunter: Lever API returned {response.status_code} for job {job_id}")
                 return False
 
             job_data = response.json()
@@ -3275,17 +3275,17 @@ class JobHunterService(BaseService):
                 )
                 if self.verbose_logging:
                     self.logger.info(
-                        f"jobhunter-service: Lever API returned {len(description)} chars for job {job_id}"
+                        f"jobhunter: Lever API returned {len(description)} chars for job {job_id}"
                     )
                 return True
             else:
                 self.logger.warning(
-                    f"jobhunter-service: No valid description from Lever API for job {job_id}"
+                    f"jobhunter: No valid description from Lever API for job {job_id}"
                 )
                 return False
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error deep scraping Lever job {job_id}: {e}")
+            self.logger.error(f"jobhunter: Error deep scraping Lever job {job_id}: {e}")
             return False
 
     def _deep_scrape_matches(self, matched_jobs: List[Dict[str, Any]]) -> int:
@@ -3302,11 +3302,11 @@ class JobHunterService(BaseService):
         total = len(matched_jobs)
 
         if self.verbose_logging:
-            self.logger.info(f"jobhunter-service: Starting deep scrape for {total} matched jobs")
+            self.logger.info(f"jobhunter: Starting deep scrape for {total} matched jobs")
 
         for i, job in enumerate(matched_jobs, 1):
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Deep scraping {i}/{total}: {job.get('title', 'Unknown')}")
+                self.logger.info(f"jobhunter: Deep scraping {i}/{total}: {job.get('title', 'Unknown')}")
 
             # Deep scrape with politeness delay
             if self._deep_scrape_job(job['id'], job['url']):
@@ -3317,7 +3317,7 @@ class JobHunterService(BaseService):
                 time.sleep(2.0)
 
         if self.verbose_logging:
-            self.logger.info(f"jobhunter-service: Deep scrape complete: {success_count}/{total} successful")
+            self.logger.info(f"jobhunter: Deep scrape complete: {success_count}/{total} successful")
         return success_count
 
     def _scrape_greenhouse(self, careers_url: str) -> List[Dict[str, Any]]:
@@ -3345,7 +3345,7 @@ class JobHunterService(BaseService):
             from urllib.parse import urlparse
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Using Greenhouse parser for {careers_url}")
+                self.logger.info(f"jobhunter: Using Greenhouse parser for {careers_url}")
 
             # Extract company slug from URL
             # Examples:
@@ -3381,7 +3381,7 @@ class JobHunterService(BaseService):
             if company_slug:
                 api_url = f"https://boards-api.greenhouse.io/v1/boards/{company_slug}/jobs"
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service: Trying Greenhouse API: {api_url}")
+                    self.logger.info(f"jobhunter: Trying Greenhouse API: {api_url}")
 
                 try:
                     headers = {
@@ -3408,20 +3408,20 @@ class JobHunterService(BaseService):
                                 })
 
                             if self.verbose_logging:
-                                self.logger.info(f"jobhunter-service: Greenhouse API returned {len(jobs)} jobs")
+                                self.logger.info(f"jobhunter: Greenhouse API returned {len(jobs)} jobs")
 
                             return jobs
                     else:
-                        self.logger.debug(f"jobhunter-service: Greenhouse API returned {response.status_code}, trying HTML fallback")
+                        self.logger.debug(f"jobhunter: Greenhouse API returned {response.status_code}, trying HTML fallback")
 
                 except Exception as e:
-                    self.logger.debug(f"jobhunter-service: Greenhouse API failed: {e}, trying HTML fallback")
+                    self.logger.debug(f"jobhunter: Greenhouse API failed: {e}, trying HTML fallback")
 
             # Method 2: Fetch HTML and look for embedded JSON (older boards)
             html = self._fetch_with_retry(careers_url, politeness_delay=2.0)
             if not html:
                 if self.verbose_logging:
-                    self.logger.warning(f"jobhunter-service: Failed to fetch Greenhouse board HTML")
+                    self.logger.warning(f"jobhunter: Failed to fetch Greenhouse board HTML")
                 return []
 
             soup = BeautifulSoup(html, 'lxml')
@@ -3440,17 +3440,17 @@ class JobHunterService(BaseService):
                                 'description': job_data.get('content', '')
                             })
                 except (json.JSONDecodeError, KeyError, TypeError) as e:
-                    self.logger.debug(f"jobhunter-service: Skipping script tag (not job data): {e}")
+                    self.logger.debug(f"jobhunter: Skipping script tag (not job data): {e}")
                     continue
 
             if jobs:
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service: Found {len(jobs)} jobs from embedded JSON")
+                    self.logger.info(f"jobhunter: Found {len(jobs)} jobs from embedded JSON")
                 return jobs
 
             # Method 2: Parse structured HTML (fallback)
             if not jobs:
-                self.logger.debug(f"jobhunter-service: No JSON data found, parsing Greenhouse HTML structure")
+                self.logger.debug(f"jobhunter: No JSON data found, parsing Greenhouse HTML structure")
 
                 # Greenhouse uses <div class="opening"> for job listings
                 job_elements = soup.find_all('div', class_='opening')
@@ -3486,11 +3486,11 @@ class JobHunterService(BaseService):
                     })
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Greenhouse parser found {len(jobs)} jobs")
+                self.logger.info(f"jobhunter: Greenhouse parser found {len(jobs)} jobs")
             return jobs
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error in Greenhouse parser: {e}")
+            self.logger.error(f"jobhunter: Error in Greenhouse parser: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
@@ -3513,12 +3513,12 @@ class JobHunterService(BaseService):
             import re
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Using Ashby parser for {careers_url}")
+                self.logger.info(f"jobhunter: Using Ashby parser for {careers_url}")
 
             # Fetch the HTML page
             html = self._fetch_with_retry(careers_url, politeness_delay=2.0)
             if not html:
-                self.logger.warning(f"jobhunter-service: Failed to fetch Ashby board HTML")
+                self.logger.warning(f"jobhunter: Failed to fetch Ashby board HTML")
                 return []
 
             jobs = []
@@ -3550,9 +3550,9 @@ class JobHunterService(BaseService):
                     try:
                         app_data = json.loads(json_str)
                         if self.verbose_logging:
-                            self.logger.info(f"jobhunter-service: Extracted Ashby __appData ({len(json_str)} chars)")
+                            self.logger.info(f"jobhunter: Extracted Ashby __appData ({len(json_str)} chars)")
                     except json.JSONDecodeError as e:
-                        self.logger.warning(f"jobhunter-service: Failed to parse Ashby JSON: {e}")
+                        self.logger.warning(f"jobhunter: Failed to parse Ashby JSON: {e}")
 
             if app_data:
                 # Extract job postings from the data
@@ -3562,7 +3562,7 @@ class JobHunterService(BaseService):
                     job_postings = app_data['jobBoard'].get('jobPostings', [])
 
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service: Ashby __appData contains {len(job_postings)} job postings")
+                    self.logger.info(f"jobhunter: Ashby __appData contains {len(job_postings)} job postings")
 
                 for job_data in job_postings:
                     # Skip unlisted jobs
@@ -3594,13 +3594,13 @@ class JobHunterService(BaseService):
                     })
 
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service: Ashby parser extracted {len(jobs)} listed jobs")
+                    self.logger.info(f"jobhunter: Ashby parser extracted {len(jobs)} listed jobs")
 
                 return jobs
 
             # Method 2: Fallback - try parsing HTML structure
             if not jobs:
-                self.logger.debug(f"jobhunter-service: No __appData found, trying HTML parsing for Ashby")
+                self.logger.debug(f"jobhunter: No __appData found, trying HTML parsing for Ashby")
                 soup = BeautifulSoup(html, 'lxml')
 
                 # Ashby uses various class names for job listings
@@ -3633,12 +3633,12 @@ class JobHunterService(BaseService):
                         })
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Ashby parser found {len(jobs)} jobs total")
+                self.logger.info(f"jobhunter: Ashby parser found {len(jobs)} jobs total")
 
             return jobs
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error in Ashby parser: {e}")
+            self.logger.error(f"jobhunter: Error in Ashby parser: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
@@ -3662,7 +3662,7 @@ class JobHunterService(BaseService):
             from urllib.parse import urlparse
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Using Lever parser for {careers_url}")
+                self.logger.info(f"jobhunter: Using Lever parser for {careers_url}")
 
             # Extract company slug from URL
             # URL format: https://jobs.lever.co/{company}
@@ -3671,14 +3671,14 @@ class JobHunterService(BaseService):
             company_slug = path_parts[0] if path_parts else None
 
             if not company_slug:
-                self.logger.warning(f"jobhunter-service: Could not extract company slug from Lever URL: {careers_url}")
+                self.logger.warning(f"jobhunter: Could not extract company slug from Lever URL: {careers_url}")
                 return []
 
             # Call Lever API
             api_url = f"https://api.lever.co/v0/postings/{company_slug}?mode=json"
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Fetching Lever API: {api_url}")
+                self.logger.info(f"jobhunter: Fetching Lever API: {api_url}")
 
             headers = {
                 'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
@@ -3688,13 +3688,13 @@ class JobHunterService(BaseService):
             response = requests.get(api_url, headers=headers, timeout=30)
 
             if response.status_code != 200:
-                self.logger.warning(f"jobhunter-service: Lever API returned {response.status_code}")
+                self.logger.warning(f"jobhunter: Lever API returned {response.status_code}")
                 return []
 
             job_data = response.json()
 
             if not job_data:
-                self.logger.info(f"jobhunter-service: Lever API returned no jobs for {company_slug}")
+                self.logger.info(f"jobhunter: Lever API returned no jobs for {company_slug}")
                 return []
 
             jobs = []
@@ -3732,12 +3732,12 @@ class JobHunterService(BaseService):
                 })
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Lever API returned {len(jobs)} jobs for {company_slug}")
+                self.logger.info(f"jobhunter: Lever API returned {len(jobs)} jobs for {company_slug}")
 
             return jobs
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error in Lever parser: {e}")
+            self.logger.error(f"jobhunter: Error in Lever parser: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
             return []
@@ -3763,12 +3763,12 @@ class JobHunterService(BaseService):
 
         try:
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Scraping {company_name} ({careers_url}) [scraper: {scraper_type}]")
+                self.logger.info(f"jobhunter: Scraping {company_name} ({careers_url}) [scraper: {scraper_type}]")
 
             # Check robots.txt first (be a good citizen)
             if check_robots:
                 if not self._check_robots_txt(careers_url):
-                    self.logger.warning(f"jobhunter-service: {company_name}: Scraping disallowed by robots.txt. Skipping.")
+                    self.logger.warning(f"jobhunter: {company_name}: Scraping disallowed by robots.txt. Skipping.")
                     return []
 
             # Route to appropriate scraper based on type
@@ -3780,7 +3780,7 @@ class JobHunterService(BaseService):
                 jobs = self._scrape_lever(careers_url)
             elif scraper_type.lower() == 'workday':
                 # TODO: Implement Workday parser (Phase 2 - Future, may need browser automation)
-                self.logger.warning(f"jobhunter-service: Workday parser not implemented yet, falling back to generic")
+                self.logger.warning(f"jobhunter: Workday parser not implemented yet, falling back to generic")
                 html = self._fetch_with_retry(careers_url, politeness_delay=politeness_delay)
                 jobs = self._scrape_generic_html(html, careers_url)
             else:
@@ -3789,7 +3789,7 @@ class JobHunterService(BaseService):
                 jobs = self._scrape_generic_html(html, careers_url)
 
             if not jobs:
-                self.logger.warning(f"jobhunter-service: {company_name}: No jobs found")
+                self.logger.warning(f"jobhunter: {company_name}: No jobs found")
                 return []
 
             # Deduplicate using job hash
@@ -3801,7 +3801,7 @@ class JobHunterService(BaseService):
 
                 # Check if job already exists in database
                 if self.db_manager.job_exists_by_hash(company_id, job_hash):
-                    self.logger.debug(f"jobhunter-service: Job already exists (skipping): {job['title']}")
+                    self.logger.debug(f"jobhunter: Job already exists (skipping): {job['title']}")
                     continue
 
                 # Add company_id and job_hash to job dict
@@ -3812,11 +3812,11 @@ class JobHunterService(BaseService):
                 new_jobs.append(job)
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: {company_name}: Found {len(jobs)} jobs, {len(new_jobs)} are new")
+                self.logger.info(f"jobhunter: {company_name}: Found {len(jobs)} jobs, {len(new_jobs)} are new")
             return new_jobs
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error scraping {company_name}: {e}")
+            self.logger.error(f"jobhunter: Error scraping {company_name}: {e}")
             return []
 
     # ============================================================================
@@ -4006,7 +4006,7 @@ class JobHunterService(BaseService):
                 # Model deprecated/removed — disable AI for this session to avoid log spam
                 model = kwargs.get('model', 'unknown')
                 self.logger.error(
-                    f"jobhunter-service: Model '{model}' not found (deprecated?). "
+                    f"jobhunter: Model '{model}' not found (deprecated?). "
                     f"Disabling AI analysis for this session. Update the model in config."
                 )
                 self.ai_enabled = False
@@ -4015,7 +4015,7 @@ class JobHunterService(BaseService):
                 if e.status_code == 529 and attempt < max_retries - 1:
                     wait = 30 * (attempt + 1)
                     self.logger.warning(
-                        f"jobhunter-service: Anthropic API overloaded (529), "
+                        f"jobhunter: Anthropic API overloaded (529), "
                         f"retry {attempt + 1}/{max_retries} in {wait}s..."
                     )
                     time.sleep(wait)
@@ -4043,7 +4043,7 @@ class JobHunterService(BaseService):
             Returns None if AI is disabled or analysis fails.
         """
         if not self.ai_enabled or not self.anthropic_client:
-            self.logger.warning(f"jobhunter-service: AI analysis skipped - enabled={self.ai_enabled}, client={self.anthropic_client is not None}")
+            self.logger.warning(f"jobhunter: AI analysis skipped - enabled={self.ai_enabled}, client={self.anthropic_client is not None}")
             return None
 
         try:
@@ -4112,7 +4112,7 @@ Respond in JSON format:
 }}"""
 
             # Call Claude API
-            self.logger.debug(f"jobhunter-service: Calling Claude API for job {job.get('id', 'unknown')}...")
+            self.logger.debug(f"jobhunter: Calling Claude API for job {job.get('id', 'unknown')}...")
             response = self._call_anthropic_with_retry(
                 model=self.ai_model,
                 max_tokens=self.ai_max_tokens,
@@ -4121,11 +4121,11 @@ Respond in JSON format:
             )
 
             # Parse response (handle markdown-wrapped JSON)
-            self.logger.debug(f"jobhunter-service: Got response, extracting text...")
+            self.logger.debug(f"jobhunter: Got response, extracting text...")
             result_text = response.content[0].text
 
             # Log raw response for debugging
-            self.logger.debug(f"jobhunter-service: Raw AI response (first 500 chars): {result_text[:500]}")
+            self.logger.debug(f"jobhunter: Raw AI response (first 500 chars): {result_text[:500]}")
 
             # Strip markdown code blocks if present
             if '```' in result_text:
@@ -4134,9 +4134,9 @@ Respond in JSON format:
                 json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', result_text, re.DOTALL)
                 if json_match:
                     result_text = json_match.group(1)
-                    self.logger.debug(f"jobhunter-service: Extracted JSON from markdown: {result_text[:300]}")
+                    self.logger.debug(f"jobhunter: Extracted JSON from markdown: {result_text[:300]}")
                 else:
-                    self.logger.warning(f"jobhunter-service: Found ``` but couldn't extract JSON, trying full text")
+                    self.logger.warning(f"jobhunter: Found ``` but couldn't extract JSON, trying full text")
 
             # Try to parse JSON
             result_text = result_text.strip()
@@ -4182,7 +4182,7 @@ Respond in JSON format:
             )
 
             self.logger.debug(
-                f"jobhunter-service: AI analysis complete for job {job['id']}: "
+                f"jobhunter: AI analysis complete for job {job['id']}: "
                 f"score={result['ai_score']}, recommendation={result['recommendation']}, "
                 f"cost=${cost:.4f}"
             )
@@ -4190,26 +4190,26 @@ Respond in JSON format:
             return result
 
         except json.JSONDecodeError as e:
-            self.logger.error(f"jobhunter-service: Failed to parse AI response as JSON: {e}")
-            self.logger.error(f"jobhunter-service: Raw response (first 1000 chars): {result_text[:1000] if 'result_text' in locals() else 'N/A'}")
+            self.logger.error(f"jobhunter: Failed to parse AI response as JSON: {e}")
+            self.logger.error(f"jobhunter: Raw response (first 1000 chars): {result_text[:1000] if 'result_text' in locals() else 'N/A'}")
             return None
         except (KeyError, ValueError) as e:
-            self.logger.error(f"jobhunter-service: AI response error: {type(e).__name__}: {e}")
-            self.logger.error(f"jobhunter-service: Error repr: {repr(e)}")
+            self.logger.error(f"jobhunter: AI response error: {type(e).__name__}: {e}")
+            self.logger.error(f"jobhunter: Error repr: {repr(e)}")
             if 'result' in locals():
-                self.logger.error(f"jobhunter-service: Response keys: {list(result.keys())}")
-                self.logger.error(f"jobhunter-service: Response content: {result}")
+                self.logger.error(f"jobhunter: Response keys: {list(result.keys())}")
+                self.logger.error(f"jobhunter: Response content: {result}")
             elif 'result_text' in locals():
-                self.logger.error(f"jobhunter-service: Raw response (first 1000 chars): {result_text[:1000]}")
+                self.logger.error(f"jobhunter: Raw response (first 1000 chars): {result_text[:1000]}")
             else:
-                self.logger.error(f"jobhunter-service: No result_text available - error before API call?")
+                self.logger.error(f"jobhunter: No result_text available - error before API call?")
             import traceback
-            self.logger.error(f"jobhunter-service: Traceback:\n{traceback.format_exc()}")
+            self.logger.error(f"jobhunter: Traceback:\n{traceback.format_exc()}")
             return None
         except Exception as e:
-            self.logger.error(f"jobhunter-service: AI analysis failed: {type(e).__name__}: {e}")
+            self.logger.error(f"jobhunter: AI analysis failed: {type(e).__name__}: {e}")
             import traceback
-            self.logger.error(f"jobhunter-service: Traceback:\n{traceback.format_exc()}")
+            self.logger.error(f"jobhunter: Traceback:\n{traceback.format_exc()}")
             return None
 
     def _format_criteria_for_ai(self, criteria: List[Dict[str, Any]]) -> str:
@@ -4427,7 +4427,7 @@ START YOUR MESSAGE WITH:
 Then provide your curated selections with detailed analysis."""
 
             # Call Claude Sonnet for the summary
-            self.logger.debug(f"jobhunter-service: Generating hiring summary with {self.ai_summary_model} for {len(approved_jobs)} jobs...")
+            self.logger.debug(f"jobhunter: Generating hiring summary with {self.ai_summary_model} for {len(approved_jobs)} jobs...")
 
             response = self._call_anthropic_with_retry(
                 model=self.ai_summary_model,
@@ -4456,16 +4456,16 @@ Then provide your curated selections with detailed analysis."""
             )
 
             self.logger.info(
-                f"jobhunter-service: Hiring summary generated: "
+                f"jobhunter: Hiring summary generated: "
                 f"{output_tokens} tokens, cost=${cost:.4f}"
             )
 
             return summary_text
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Failed to generate hiring summary: {type(e).__name__}: {e}")
+            self.logger.error(f"jobhunter: Failed to generate hiring summary: {type(e).__name__}: {e}")
             import traceback
-            self.logger.error(f"jobhunter-service: Traceback:\n{traceback.format_exc()}")
+            self.logger.error(f"jobhunter: Traceback:\n{traceback.format_exc()}")
             return None
 
     def _extract_salary(self, text: str) -> tuple:
@@ -4505,7 +4505,7 @@ Then provide your curated selections with detailed analysis."""
         Calculates next run time based on active schedules and sleeps until then.
         Triggers the complete workflow: scrape → score → deep-match → notify.
         """
-        self.logger.info("jobhunter-service: Scheduler loop started")
+        self.logger.info("jobhunter: Scheduler loop started")
 
         while self._running:
             try:
@@ -4514,7 +4514,7 @@ Then provide your curated selections with detailed analysis."""
 
                 if next_run is None:
                     # No active schedules - sleep and check again later
-                    self.logger.debug("jobhunter-service: No active schedules - waiting 60 seconds")
+                    self.logger.debug("jobhunter: No active schedules - waiting 60 seconds")
                     self._shutdown_event.wait(60)
                     continue
 
@@ -4523,7 +4523,7 @@ Then provide your curated selections with detailed analysis."""
                 time_until_run = (next_run - now).total_seconds()
 
                 if time_until_run > 0:
-                    self.logger.info(f"jobhunter-service: Next scheduled scrape: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')} (in {time_until_run/60:.1f} minutes)")
+                    self.logger.info(f"jobhunter: Next scheduled scrape: {next_run.strftime('%Y-%m-%d %H:%M:%S %Z')} (in {time_until_run/60:.1f} minutes)")
 
                     # Sleep until next run (or until shutdown)
                     if self._shutdown_event.wait(timeout=time_until_run):
@@ -4531,24 +4531,24 @@ Then provide your curated selections with detailed analysis."""
                         break
                 else:
                     # Time has already passed - run immediately
-                    self.logger.info("jobhunter-service: Scheduled time has passed - running immediately")
+                    self.logger.info("jobhunter: Scheduled time has passed - running immediately")
 
                 # Check if still running after sleep
                 if not self._running:
                     break
 
                 # Run the daily scrape workflow
-                self.logger.info("jobhunter-service: 🔄 Starting scheduled scrape workflow")
+                self.logger.info("jobhunter: 🔄 Starting scheduled scrape workflow")
                 self._run_daily_scrape()
 
             except Exception as e:
-                self.logger.error(f"jobhunter-service: Error in scheduler loop: {e}")
+                self.logger.error(f"jobhunter: Error in scheduler loop: {e}")
                 import traceback
-                self.logger.error(f"jobhunter-service: Traceback: {traceback.format_exc()}")
+                self.logger.error(f"jobhunter: Traceback: {traceback.format_exc()}")
                 # Sleep 5 minutes on error, then retry
                 self._shutdown_event.wait(300)
 
-        self.logger.info("jobhunter-service: Scheduler loop stopped")
+        self.logger.info("jobhunter: Scheduler loop stopped")
 
     def _calculate_next_run(self) -> Optional[datetime]:
         """
@@ -4592,7 +4592,7 @@ Then provide your curated selections with detailed analysis."""
                     next_runs.append(scheduled_utc)
 
                 except Exception as e:
-                    self.logger.error(f"jobhunter-service: Error parsing schedule {run_time_str} ({tz_name}): {e}")
+                    self.logger.error(f"jobhunter: Error parsing schedule {run_time_str} ({tz_name}): {e}")
                     continue
 
             if not next_runs:
@@ -4602,7 +4602,7 @@ Then provide your curated selections with detailed analysis."""
             return min(next_runs)
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error calculating next run: {e}")
+            self.logger.error(f"jobhunter: Error calculating next run: {e}")
             return None
 
     def _run_daily_scrape(self, trigger_type: str = 'scheduled'):
@@ -4620,17 +4620,17 @@ Then provide your curated selections with detailed analysis."""
             start_time = time.time()
             run_id = self.db_manager.create_run(trigger_type)
             self.logger.debug("=" * 60)
-            self.logger.debug("jobhunter-service: 🚀 Starting Daily Scrape Workflow")
+            self.logger.debug("jobhunter: 🚀 Starting Daily Scrape Workflow")
             self.logger.debug("=" * 60)
 
             # Step 1: Get active companies
             companies = self.db_manager.get_active_companies()
             if not companies:
-                self.logger.warning("jobhunter-service: No active companies to scrape")
+                self.logger.warning("jobhunter: No active companies to scrape")
                 return
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: 📋 Found {len(companies)} active companies")
+                self.logger.info(f"jobhunter: 📋 Found {len(companies)} active companies")
 
             # Step 2: Light scrape all companies
             total_jobs_scraped = 0
@@ -4639,7 +4639,7 @@ Then provide your curated selections with detailed analysis."""
             for i, company in enumerate(companies, 1):
                 try:
                     if self.verbose_logging:
-                        self.logger.info(f"jobhunter-service: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
+                        self.logger.info(f"jobhunter: 🔍 Scraping {i}/{len(companies)}: {company['name']}")
 
                     jobs = self._scrape_company(
                         company_id=company['id'],
@@ -4667,22 +4667,22 @@ Then provide your curated selections with detailed analysis."""
                     total_new_jobs += new_count
 
                     if self.verbose_logging:
-                        self.logger.info(f"jobhunter-service:    ✅ {len(jobs)} jobs found, {new_count} new")
+                        self.logger.info(f"jobhunter:    ✅ {len(jobs)} jobs found, {new_count} new")
 
                     # Rate limiting between companies
                     if i < len(companies):
                         time.sleep(self.config.get('rate_limit_delay', 3))
 
                 except Exception as e:
-                    self.logger.error(f"jobhunter-service:    ❌ Failed to scrape {company['name']}: {e}")
+                    self.logger.error(f"jobhunter:    ❌ Failed to scrape {company['name']}: {e}")
                     continue
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: \n📊 Light Scrape Summary: {total_jobs_scraped} total, {total_new_jobs} new jobs")
+                self.logger.info(f"jobhunter: \n📊 Light Scrape Summary: {total_jobs_scraped} total, {total_new_jobs} new jobs")
 
             # Step 3: Score all recent jobs
             if self.verbose_logging:
-                self.logger.info("jobhunter-service: \n🎯 Scoring jobs against criteria...")
+                self.logger.info("jobhunter: \n🎯 Scoring jobs against criteria...")
             recent_jobs = self.db_manager.get_recent_jobs(limit=1000)
             matched_jobs = []
 
@@ -4702,18 +4702,18 @@ Then provide your curated selections with detailed analysis."""
             matched_jobs.sort(key=lambda x: x['score'], reverse=True)
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service:    ✅ {len(matched_jobs)} jobs scored >= {min_score}")
+                self.logger.info(f"jobhunter:    ✅ {len(matched_jobs)} jobs scored >= {min_score}")
 
             # Step 4: Deep scrape top matches
             deep_scraped_jobs = []
             if matched_jobs:
                 deep_scrape_limit = min(20, len(matched_jobs))  # Limit to top 20
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service: \n🔬 Deep scraping top {deep_scrape_limit} matches...")
+                    self.logger.info(f"jobhunter: \n🔬 Deep scraping top {deep_scrape_limit} matches...")
 
                 success_count = self._deep_scrape_matches(matched_jobs[:deep_scrape_limit])
                 if self.verbose_logging:
-                    self.logger.info(f"jobhunter-service:    ✅ Successfully deep scraped {success_count}/{deep_scrape_limit} jobs")
+                    self.logger.info(f"jobhunter:    ✅ Successfully deep scraped {success_count}/{deep_scrape_limit} jobs")
 
                 # Get the deep-scraped jobs with full descriptions
                 for match in matched_jobs[:deep_scrape_limit]:
@@ -4723,7 +4723,7 @@ Then provide your curated selections with detailed analysis."""
                         match['job'] = job  # Update with full description
                         deep_scraped_jobs.append(match)
                     elif self.verbose_logging:
-                        self.logger.warning(f"jobhunter-service: Job {job['id']} has no full description after deep scrape")
+                        self.logger.warning(f"jobhunter: Job {job['id']} has no full description after deep scrape")
 
             # Step 5: AI Analysis (Phase 11)
             ai_approved_jobs = []
@@ -4734,21 +4734,21 @@ Then provide your curated selections with detailed analysis."""
 
                 if skipped_count > 0:
                     self.logger.info(
-                        f"jobhunter-service: 💰 Skipped {skipped_count} jobs with criteria score < {self.ai_prescreen_threshold} "
+                        f"jobhunter: 💰 Skipped {skipped_count} jobs with criteria score < {self.ai_prescreen_threshold} "
                         f"(saved ~${skipped_count * 0.0017:.4f} in AI costs)"
                     )
 
                 if ai_candidates:
-                    self.logger.debug(f"jobhunter-service: 🤖 Running AI analysis on {len(ai_candidates)} high-scoring jobs (criteria >= {self.ai_prescreen_threshold})...")
+                    self.logger.debug(f"jobhunter: 🤖 Running AI analysis on {len(ai_candidates)} high-scoring jobs (criteria >= {self.ai_prescreen_threshold})...")
                 else:
-                    self.logger.debug(f"jobhunter-service: ℹ️  No jobs met AI prescreen threshold ({self.ai_prescreen_threshold})")
+                    self.logger.debug(f"jobhunter: ℹ️  No jobs met AI prescreen threshold ({self.ai_prescreen_threshold})")
 
                 ai_analysis_count = 0
                 for i, match in enumerate(ai_candidates, 1):
                     job = match['job']
 
                     if self.verbose_logging:
-                        self.logger.info(f"jobhunter-service:    Analyzing {i}/{len(ai_candidates)}: {job.get('title', 'Unknown')}")
+                        self.logger.info(f"jobhunter:    Analyzing {i}/{len(ai_candidates)}: {job.get('title', 'Unknown')}")
 
                     # Run AI analysis
                     ai_result = self._analyze_job_with_cv(job)
@@ -4771,18 +4771,18 @@ Then provide your curated selections with detailed analysis."""
 
                             if self.verbose_logging:
                                 self.logger.info(
-                                    f"jobhunter-service:       ✅ APPROVED: Score={ai_result['ai_score']}, "
+                                    f"jobhunter:       ✅ APPROVED: Score={ai_result['ai_score']}, "
                                     f"Rec={ai_result['recommendation']}"
                                 )
                         else:
                             if self.verbose_logging:
                                 self.logger.info(
-                                    f"jobhunter-service:       ❌ FILTERED: Score={ai_result['ai_score']} "
+                                    f"jobhunter:       ❌ FILTERED: Score={ai_result['ai_score']} "
                                     f"(threshold={self.ai_min_score})"
                                 )
 
                 self.logger.info(
-                    f"jobhunter-service:    ✅ AI analysis complete: {ai_analysis_count} analyzed, "
+                    f"jobhunter:    ✅ AI analysis complete: {ai_analysis_count} analyzed, "
                     f"{len(ai_approved_jobs)} approved (score >= {self.ai_min_score})"
                 )
 
@@ -4801,10 +4801,10 @@ Then provide your curated selections with detailed analysis."""
                         f"**🎯 JobHunter: Today's Top Opportunities**\n\n{summary}",
                         content_type="text/markdown"
                     )
-                    self.logger.debug(f"jobhunter-service: Sent hiring summary for {len(ai_approved_jobs)} approved jobs")
+                    self.logger.debug(f"jobhunter: Sent hiring summary for {len(ai_approved_jobs)} approved jobs")
                 else:
                     # Summary generation failed - log error but don't spam with individual notifications
-                    self.logger.error("jobhunter-service: Summary generation failed - no notifications sent")
+                    self.logger.error("jobhunter: Summary generation failed - no notifications sent")
                     self._send_response(
                         "broadcast",
                         f"⚠️ **JobHunter**: Found {len(ai_approved_jobs)} approved jobs but failed to generate summary. Check logs for details.",
@@ -4817,23 +4817,23 @@ Then provide your curated selections with detailed analysis."""
             # Summary
             elapsed = time.time() - start_time
             self.logger.info("\n" + "=" * 60)
-            self.logger.info("jobhunter-service: ✨ Daily Scrape Workflow Complete")
-            self.logger.info(f"jobhunter-service:    • Companies scraped: {len(companies)}")
-            self.logger.info(f"jobhunter-service:    • Total jobs found: {total_jobs_scraped}")
-            self.logger.info(f"jobhunter-service:    • New jobs: {total_new_jobs}")
-            self.logger.info(f"jobhunter-service:    • High-scoring matches: {len(matched_jobs)}")
-            self.logger.info(f"jobhunter-service:    • Deep scraped: {len(deep_scraped_jobs)}")
+            self.logger.info("jobhunter: ✨ Daily Scrape Workflow Complete")
+            self.logger.info(f"jobhunter:    • Companies scraped: {len(companies)}")
+            self.logger.info(f"jobhunter:    • Total jobs found: {total_jobs_scraped}")
+            self.logger.info(f"jobhunter:    • New jobs: {total_new_jobs}")
+            self.logger.info(f"jobhunter:    • High-scoring matches: {len(matched_jobs)}")
+            self.logger.info(f"jobhunter:    • Deep scraped: {len(deep_scraped_jobs)}")
 
             if self.ai_enabled:
-                self.logger.info(f"jobhunter-service:    • AI approved (>={self.ai_min_score}): {len(ai_approved_jobs)}")
+                self.logger.info(f"jobhunter:    • AI approved (>={self.ai_min_score}): {len(ai_approved_jobs)}")
                 if ai_approved_jobs:
-                    self.logger.info(f"jobhunter-service:    • Notification: Curated summary sent (1 message)")
+                    self.logger.info(f"jobhunter:    • Notification: Curated summary sent (1 message)")
                 else:
-                    self.logger.info(f"jobhunter-service:    • Notification: None (no approved jobs)")
+                    self.logger.info(f"jobhunter:    • Notification: None (no approved jobs)")
             else:
-                self.logger.info(f"jobhunter-service:    • Notifications sent: {len(matched_jobs)}")
+                self.logger.info(f"jobhunter:    • Notifications sent: {len(matched_jobs)}")
 
-            self.logger.info(f"jobhunter-service:    • Time elapsed: {elapsed/60:.1f} minutes")
+            self.logger.info(f"jobhunter:    • Time elapsed: {elapsed/60:.1f} minutes")
             self.logger.info("=" * 60)
 
             # Persist run results
@@ -4855,9 +4855,9 @@ Then provide your curated selections with detailed analysis."""
 
         except Exception as e:
             elapsed = time.time() - start_time if 'start_time' in locals() else 0
-            self.logger.error(f"jobhunter-service: Error in daily scrape workflow: {e}")
+            self.logger.error(f"jobhunter: Error in daily scrape workflow: {e}")
             import traceback
-            self.logger.error(f"jobhunter-service: Traceback: {traceback.format_exc()}")
+            self.logger.error(f"jobhunter: Traceback: {traceback.format_exc()}")
             if run_id:
                 self.db_manager.update_run(
                     run_id,
@@ -4885,7 +4885,7 @@ Then provide your curated selections with detailed analysis."""
         """
         try:
             if not matched_jobs:
-                self.logger.info("jobhunter-service: No matched jobs to notify")
+                self.logger.info("jobhunter: No matched jobs to notify")
                 return
 
             # Get notification settings
@@ -4896,12 +4896,12 @@ Then provide your curated selections with detailed analysis."""
             notify_jobs = [m for m in matched_jobs if m['score'] >= min_score]
 
             if not notify_jobs:
-                self.logger.info(f"jobhunter-service: No jobs scored >= {min_score} (notification threshold)")
+                self.logger.info(f"jobhunter: No jobs scored >= {min_score} (notification threshold)")
                 return
 
             # Limit to max notifications
             if len(notify_jobs) > max_notifications:
-                self.logger.info(f"jobhunter-service: Limiting notifications to top {max_notifications} jobs")
+                self.logger.info(f"jobhunter: Limiting notifications to top {max_notifications} jobs")
                 notify_jobs = notify_jobs[:max_notifications]
 
             # Separate NEW jobs from existing jobs
@@ -4912,7 +4912,7 @@ Then provide your curated selections with detailed analysis."""
             sorted_jobs = sorted(new_jobs, key=lambda x: x['score'], reverse=True) + \
                          sorted(existing_jobs, key=lambda x: x['score'], reverse=True)
 
-            self.logger.info(f"jobhunter-service: Sending notifications for {len(sorted_jobs)} jobs ({len(new_jobs)} new, {len(existing_jobs)} existing)")
+            self.logger.info(f"jobhunter: Sending notifications for {len(sorted_jobs)} jobs ({len(new_jobs)} new, {len(existing_jobs)} existing)")
 
             # Send header message
             if new_jobs:
@@ -4931,10 +4931,10 @@ Then provide your curated selections with detailed analysis."""
             for match in new_jobs:
                 self.db_manager.mark_job_as_seen(match['job']['id'])
 
-            self.logger.info(f"jobhunter-service: ✅ Sent {len(sorted_jobs)} job notifications")
+            self.logger.info(f"jobhunter: ✅ Sent {len(sorted_jobs)} job notifications")
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error sending notifications: {e}")
+            self.logger.error(f"jobhunter: Error sending notifications: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")
 
@@ -4998,9 +4998,9 @@ Then provide your curated selections with detailed analysis."""
             self._send_response("broadcast", message, content_type="text/markdown")
 
             if self.verbose_logging:
-                self.logger.info(f"jobhunter-service: Sent notification for: {job['title']}")
+                self.logger.info(f"jobhunter: Sent notification for: {job['title']}")
 
         except Exception as e:
-            self.logger.error(f"jobhunter-service: Error sending job notification: {e}")
+            self.logger.error(f"jobhunter: Error sending job notification: {e}")
             import traceback
             self.logger.error(f"Traceback: {traceback.format_exc()}")

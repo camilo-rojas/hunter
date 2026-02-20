@@ -1,0 +1,292 @@
+# RobotRay JobHunter Service Configuration
+#
+# This service automates job hunting by scraping company career pages,
+# intelligently filtering based on user criteria, and delivering matches
+# via Telegram for rapid application.
+#
+# ADR-005: JobHunter Service - Automated Job Search and Matching
+#
+# --- FEATURES ---
+#
+# - Automated daily/multi-schedule scraping of company career pages
+# - User-defined criteria with flexible weighting (keywords, location, salary, skills)
+# - Authentication support for login-protected pages (Workday, Taleo, etc.)
+# - Job freshness detection (NEW jobs get +15 bonus and priority)
+# - Intelligent multi-factor scoring algorithm
+# - Telegram notifications prioritizing NEW jobs
+# - Database persistence for companies, jobs, matches, criteria, schedules
+#
+# --- SETUP INSTRUCTIONS ---
+#
+# 1. Ensure dependencies are installed:
+#    pip install requests beautifulsoup4 lxml pytz
+#
+# 2. Enable and start the service:
+#    In the RobotRay console, run:
+#
+#    enable jobhunter
+#    start jobhunter
+#
+# 3. Add companies to scrape:
+#    @jobhunter add-company "Anthropic" "https://www.anthropic.com/careers"
+#
+# 4. Customize search criteria:
+#    @jobhunter set-criteria keyword "python" 10
+#    @jobhunter set-criteria location "Remote" 20
+#
+# 5. Set run schedules (or use defaults):
+#    @jobhunter add-schedule "09:00"
+#
+# --- END OF SETUP INSTRUCTIONS ---
+
+name: "jobhunter"
+
+# Enable or disable the service on server startup.
+# Set to `true` to have the service start automatically.
+enabled: false  # Manual enable for initial setup
+
+# The Python class path for the service implementation.
+class_path: robotray.services.jobhunter_service.JobHunterService
+
+# Human-readable service description.
+description: "Automated job search and matching service with intelligent filtering"
+
+# Service dependencies (services that must be started before this one).
+# JobHunter can run standalone - no hard dependencies
+dependencies: []
+
+# Service tags for categorization and filtering.
+tags:
+  - jobs
+  - automation
+  - scraping
+  - backend
+  - notifications
+
+# Service-specific configuration.
+config:
+  # Database configuration
+  database_path: "data/jobhunter.db"
+
+  # Scheduled run times (loaded on first start, then managed via commands)
+  # After first start, use: @jobhunter add-schedule "21:00"
+  default_schedules:
+    - {time: "09:00", timezone: "America/New_York"}   # Morning check
+    - {time: "13:00", timezone: "America/New_York"}   # Lunch check
+    - {time: "17:00", timezone: "America/New_York"}   # Evening check
+
+  # Logging configuration
+  verbose_logging: false               # Show detailed scraping progress (default: false for concise output)
+
+  # Web scraping behavior
+  request_timeout: 30                  # HTTP request timeout (seconds)
+  rate_limit_delay: 3                  # Seconds between company scrapes
+  max_retries: 3                       # Retry attempts for failed requests
+  user_agent: "Mozilla/5.0 (compatible; JobHunterBot/1.0; +https://github.com/yourusername/robotray)"
+
+  # Authentication settings (Phase 4.5)
+  session_cache_duration: 3600         # Cache authenticated sessions (seconds)
+  auth_retry_limit: 2                  # Max auth attempts before failing
+  credential_encryption_key: "env:JOBHUNTER_ENCRYPTION_KEY"  # From SecretsManager
+
+  # Default search criteria (loaded on first start, then managed via commands)
+  # Users can customize via @jobhunter set-criteria commands
+  # These are just starting templates
+  default_criteria:
+    # Keywords (match in job title/description)
+    - {type: "keyword", value: "python", weight: 10}
+    - {type: "keyword", value: "senior engineer", weight: 15}
+    - {type: "keyword", value: "backend", weight: 10}
+
+    # Salary thresholds
+    - {type: "min_salary", value: "120000", weight: 20}
+
+    # Required skills (must have - score=0 if missing)
+    - {type: "required_skill", value: "python", weight: 10}
+    - {type: "required_skill", value: "REST API", weight: 10}
+
+  # Default criterion groups (Phase 3 - multi-value and tiered matching)
+  # Loaded on first start if database is empty
+  default_criterion_groups:
+    # Example 1: Multi-value OR matching (department flexibility)
+    - name: "departments"
+      match_type: "any"           # Match ANY value → add weight ONCE
+      weight: 15
+      values:
+        - "sales"
+        - "marketing"
+        - "business development"
+        - "customer success"
+
+    # Example 2: Tiered geography preferences
+    - name: "geography"
+      match_type: "tiered"        # Check tiers in order, use first match
+      values:
+        - {value: "Latin America", tier: "preferred", weight: 20}
+        - {value: "Remote", tier: "preferred", weight: 20}
+        - {value: "US East", tier: "acceptable", weight: 0}
+        - {value: "US West", tier: "acceptable", weight: 0}
+        - {value: "On-site only", tier: "undesirable", weight: -10}
+
+    # Example 3: Tech stack flexibility (backend frameworks)
+    - name: "tech_stack"
+      match_type: "any"           # Match ANY backend framework
+      weight: 10
+      values:
+        - "FastAPI"
+        - "Django"
+        - "Flask"
+        - "Tornado"
+
+  # Scoring thresholds (user-configurable)
+  scoring_thresholds:
+    high_priority: 70      # 🔥 HIGH PRIORITY - Apply immediately
+    good_match: 60         # ✅ GOOD MATCH - Strong candidate
+    review: 40             # 📌 REVIEW - Worth considering
+    low_priority: 0        # 📋 LOW PRIORITY - Below review threshold
+
+  # Notification settings
+  batch_notifications: false           # One message per match (true = summary)
+  max_notifications_per_run: 10        # Prevent spam on first run
+  min_match_score: 60                  # Notify if score >= this threshold (lowered for testing)
+  send_individual_notifications: false # Send individual job notifications in addition to AI summary (false = summary only)
+
+  # AI Analysis Configuration (Phase 11)
+  ai_analysis:
+    enabled: true                        # Enable AI-powered job analysis
+    model: "claude-haiku-4-5-20251001"   # Fast, cost-effective model for individual job analysis
+    summary_model: "claude-sonnet-4-20250514"  # Higher quality model for final hiring summary
+    max_tokens: 1000                     # Response token limit for individual analysis
+    summary_max_tokens: 2000             # Token limit for final summary (needs more for detailed writeup)
+    temperature: 0.3                     # Lower temp for consistent analysis
+    prescreen_threshold: 70              # Only run AI on jobs with criteria score >= 70 (saves cost on poor matches)
+    min_score_threshold: 60              # Only notify jobs with AI score >= 60 (lowered for testing)
+    cost_limit_daily: 5.00               # Max $5/day on AI analysis
+    cv_path: "data/cv/resume.md"         # Path to your CV (for comparison)
+
+    # Customizable AI prompt template for individual job analysis
+    # Variables: {cv_content}, {goal_content}, {criteria_summary}, {job_title}, {job_company}, {job_location}, {job_url}, {job_description}
+    prompt_template: |
+      You are an expert job matching assistant. Analyze this job opportunity.
+
+      USER PROFILE (CV):
+      {cv_content}
+
+      CANDIDATE'S SEARCH GOAL (in their own words - pay close attention to preferences):
+      {goal_content}
+
+      USER CRITERIA:
+      {criteria_summary}
+
+      JOB POSTING:
+      Title: {job_title}
+      Company: {job_company}
+      Location: {job_location}
+      URL: {job_url}
+
+      Description:
+      {job_description}
+
+      TASK:
+      Evaluate this job against the user's profile, their SEARCH GOAL, and criteria. Be SELECTIVE - only score 90+ for truly excellent matches where the user's experience, skills, and preferences align very well. Pay special attention to the candidate's search goal for role type, compensation ($250k base / $400-450k OTE), location (prefers remote/Florida, dislikes daily office commute), and work style preferences.
+
+      If the job is not a good fit, score it low. It's OK to find NO jobs worth pursuing - only recommend jobs that are truly excellent matches. A role requiring relocation should be flagged as a concern and penalized unless it's otherwise exceptional.
+
+      Provide:
+      1. Overall fit score (0-100) - Be selective, 90+ means excellent match
+      2. Detailed reasoning explaining the score (2-3 sentences)
+      3. Summary of fit (1-2 sentences)
+      4. Any concerns or red flags (list, can be empty)
+      5. Recommendation:
+         - APPLY (90+): Excellent match, strong alignment
+         - REVIEW (70-89): Good match but needs review
+         - SKIP (<70): Not a good fit
+
+      Respond in JSON format:
+      {{
+          "ai_score": <0-100>,
+          "reasoning": "<detailed analysis in 2-3 sentences>",
+          "fit_summary": "<1-2 sentences>",
+          "concerns": ["<concern1>", "<concern2>"],
+          "recommendation": "APPLY|REVIEW|SKIP"
+      }}
+
+    # Customizable hiring summary prompt template (uses Claude Sonnet for final curation)
+    # Variables: {cv_content}, {goal_content}, {criteria_summary}, {jobs_text}, {job_count}
+    summary_prompt_template: |
+      You are a professional hiring assistant. Review these {job_count} pre-screened positions and select the TOP 1-3 opportunities (max 5 if all exceptional).
+
+      CLIENT PROFILE:
+      {cv_content}
+
+      CLIENT'S SEARCH GOAL (in their own words - respect these preferences):
+      {goal_content}
+
+      SEARCH CRITERIA:
+      {criteria_summary}
+
+      CANDIDATES:
+      {jobs_text}
+
+      FORMATTING RULES (CRITICAL):
+      - NO ## or ### headers - use **bold text** only
+      - Be extremely concise - target 1/3 normal length
+      - Each position should be ~15-20 lines total (not 40+)
+      - Use tight paragraphs, not long bullet lists
+      - Include links: [Position Title](URL)
+      - Note if 🔥 NEW/FRESH (time-sensitive) or if previously sent
+
+      STRUCTURE FOR EACH POSITION:
+
+      **[Position Title](URL)** at Company
+      🔥 BRAND NEW - just posted! (or) Sent yesterday - still worth considering
+
+      **Great match because:** [4-5 lines max combining role fit, skills match, criteria alignment, and compensation]
+
+      **Minor considerations:** [4-5 lines max covering any gaps, concerns, or things to be aware of]
+
+      **Recommendation:** [ONE paragraph, 3-4 lines. Be direct. NO action items like "tailor your CV" or "reach out" - this is automated analysis]
+
+      ---
+
+      For secondary options (positions 2-3):
+      **[Position Title](URL)** at Company
+
+      **Why compelling:** [3-4 lines max]
+
+      **Considerations:** [3-4 lines max]
+
+      **Recommendation:** [2-3 lines, direct and concise]
+
+      Be selective, honest, and concise. Your client values brevity.
+
+  # Freshness detection settings
+  new_job_bonus: 15                    # Bonus points for NEW jobs
+  freshness_decay_days: [3, 7]         # Decay thresholds (days)
+
+  # Auto-cleanup settings
+  stale_job_threshold_days: 30         # Mark jobs inactive if not seen in N days
+
+  # Message queue settings
+  max_queue_size: 1000
+
+# Health check configuration
+health_check:
+  enabled: true
+  interval: 60  # Health check every 60 seconds
+
+# Service startup configuration
+startup:
+  priority: 10  # Start after core services (higher priority number)
+  delay: 2      # Wait 2 seconds after dependencies
+
+# Messaging permissions and rate limiting
+messaging:
+  permissions:
+    - "send_to:telegram"             # Send notifications to Telegram
+    - "send_to:broadcast"            # Broadcast notifications
+    - "receive_from:*"               # Receive commands from all channels
+
+  rate_limit:
+    messages_per_minute: 30
+    burst_size: 10

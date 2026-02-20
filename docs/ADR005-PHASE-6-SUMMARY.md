@@ -142,7 +142,7 @@ def _run_daily_scrape(self):
 
 ```bash
 # Usage
-@jobhunter-service run-now
+@jobhunter run-now
 
 # Response
 **🚀 Manual Workflow Trigger**
@@ -190,13 +190,13 @@ def _generate_job_hash(self, title: str, url: str) -> str:
 
 **List Mode:**
 ```bash
-@jobhunter-service score-jobs [limit] [min_score]
+@jobhunter score-jobs [limit] [min_score]
 # Shows list of jobs with scores
 ```
 
 **Detail Mode:**
 ```bash
-@jobhunter-service score-jobs <job_id>
+@jobhunter score-jobs <job_id>
 # Shows full details for specific job
 ```
 
@@ -341,7 +341,7 @@ WHERE group_id NOT IN (SELECT id FROM criterion_groups);
 
 **Issue:** Scheduler logs were inconsistent, some missing "servicename:" prefix.
 
-**Fix:** Updated all logger calls in scheduler methods to use "jobhunter-service: message" format.
+**Fix:** Updated all logger calls in scheduler methods to use "jobhunter: message" format.
 
 **Examples:**
 ```python
@@ -350,8 +350,8 @@ self.logger.info("Scheduler loop started")
 self.logger.info(f"Next scheduled scrape: {next_run}")
 
 # After
-self.logger.info("jobhunter-service: Scheduler loop started")
-self.logger.info(f"jobhunter-service: Next scheduled scrape: {next_run}")
+self.logger.info("jobhunter: Scheduler loop started")
+self.logger.info(f"jobhunter: Next scheduled scrape: {next_run}")
 ```
 
 **Affected Methods:**
@@ -367,7 +367,7 @@ self.logger.info(f"jobhunter-service: Next scheduled scrape: {next_run}")
 
 **Test 1: Manual Trigger**
 ```bash
-@jobhunter-service run-now
+@jobhunter run-now
 ```
 
 **Result:**
@@ -379,7 +379,7 @@ self.logger.info(f"jobhunter-service: Next scheduled scrape: {next_run}")
 
 **Test 2: Job Detail View**
 ```bash
-@jobhunter-service score-jobs 312
+@jobhunter score-jobs 312
 ```
 
 **Result:**
@@ -426,7 +426,7 @@ Expected Score: 105 → capped at 100 ✅
    - Updated: Help text with complete workflow documentation
    - Added imports: `time`, `hashlib`, `pytz`
 
-2. **`config/services/jobhunter-service.yaml`**
+2. **`config/services/jobhunter.yaml`**
    - Verified: `default_schedules` section with 3 daily run times
 
 3. **`CHANGELOG.md`**
@@ -445,10 +445,10 @@ Expected Score: 105 → capped at 100 ✅
 **New Commands:**
 ```bash
 # Manually trigger complete workflow
-@jobhunter-service run-now
+@jobhunter run-now
 
 # View job details (enhanced)
-@jobhunter-service score-jobs <job_id>
+@jobhunter score-jobs <job_id>
 ```
 
 **Updated Help Text:**
@@ -460,10 +460,10 @@ Expected Score: 105 → capped at 100 ✅
 
 **Job Filtering & Scoring (Phase 5 ✅):**
 • `score-jobs [limit] [min_score]` - Score jobs against your criteria
-  Example: @jobhunter-service score-jobs 50 60
+  Example: @jobhunter score-jobs 50 60
 
 • `score-jobs <job_id>` - Show full details for specific job
-  Example: @jobhunter-service score-jobs 412
+  Example: @jobhunter score-jobs 412
   Shows: full description, salary, location, score breakdown
 ```
 

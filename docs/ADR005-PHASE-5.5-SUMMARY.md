@@ -75,16 +75,16 @@ Command handler for `deep-match` command:
 
 **Usage:**
 ```bash
-@jobhunter-service deep-match [min_score] [limit]
+@jobhunter deep-match [min_score] [limit]
 ```
 
 **Examples:**
 ```bash
 # Deep scrape top 10 jobs with score >= 70
-@jobhunter-service deep-match 70 10
+@jobhunter deep-match 70 10
 
 # Use defaults (score >= 60, limit 50)
-@jobhunter-service deep-match
+@jobhunter deep-match
 ```
 
 **Response Format:**
@@ -190,7 +190,7 @@ Use 'score-jobs' to see them with complete details.
 
 ## Documentation Updates
 
-### 1. ADR-005 (`docs/ADR-005-jobhunter-service.md`)
+### 1. ADR-005 (`docs/ADR-005-jobhunter.md`)
 - Marked Phase 5 and 5.5 as complete (✅)
 - Updated verification section with test results
 - Added implementation status and test coverage details
@@ -244,7 +244,7 @@ Use 'score-jobs' to see them with complete details.
 3. **`tests/unit/test_services/test_jobhunter_service.py`**
    - Added: `TestPhase5_5DeepScraping` class (12 tests)
 
-4. **`docs/ADR-005-jobhunter-service.md`**
+4. **`docs/ADR-005-jobhunter.md`**
    - Updated: Phase status markers
    - Added: Verification details and test results
 

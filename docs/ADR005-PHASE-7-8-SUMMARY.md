@@ -328,31 +328,31 @@ config:
 
 **Add Schedule:**
 ```
-@jobhunter-service add-schedule "09:00"
-@jobhunter-service add-schedule "17:00" "America/Los_Angeles"
+@jobhunter add-schedule "09:00"
+@jobhunter add-schedule "17:00" "America/Los_Angeles"
 ```
 
 **List Schedules:**
 ```
-@jobhunter-service list-schedules
+@jobhunter list-schedules
 ```
 
 **Remove Schedule:**
 ```
-@jobhunter-service remove-schedule 3
+@jobhunter remove-schedule 3
 ```
 
 ### Phase 8 Commands
 
 **List New Jobs:**
 ```
-@jobhunter-service list-new-jobs
+@jobhunter list-new-jobs
 ```
 
 **List Stale Jobs:**
 ```
-@jobhunter-service list-stale-jobs          # Default: >14 days
-@jobhunter-service list-stale-jobs 30       # Custom: >30 days
+@jobhunter list-stale-jobs          # Default: >14 days
+@jobhunter list-stale-jobs 30       # Custom: >30 days
 ```
 
 ---

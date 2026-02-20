@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-This ADR defines the architecture for the **jobhunter-service** - an automated job hunting service that daily scrapes company career pages, intelligently filters positions based on user criteria (skills, location, salary), and delivers matching opportunities via Telegram for rapid application.
+This ADR defines the architecture for the **jobhunter** - an automated job hunting service that daily scrapes company career pages, intelligently filters positions based on user criteria (skills, location, salary), and delivers matching opportunities via Telegram for rapid application.
 
 **Key Deliverables:**
 1. **Flexible Scheduler**: Multiple daily run times with timezone support (Phase 7)
@@ -412,7 +412,7 @@ run_schedules (id, run_time, timezone, active, created_date, notes)
 - Indexes on common query columns for performance
 
 #### 3. Configuration File
-**File:** `config/services/jobhunter-service.yaml` (~80 lines)
+**File:** `config/services/jobhunter.yaml` (~80 lines)
 
 **Key Configuration:**
 ```yaml
@@ -425,8 +425,8 @@ config:
     - {time: "13:00", timezone: "America/New_York"}   # Lunch check
     - {time: "17:00", timezone: "America/New_York"}   # Evening check
   # NOTE: After first start, use commands to manage schedules:
-  #   @jobhunter-service add-schedule "21:00"
-  #   @jobhunter-service list-schedules
+  #   @jobhunter add-schedule "21:00"
+  #   @jobhunter list-schedules
 
   # Web scraping behavior
   request_timeout: 30
@@ -440,7 +440,7 @@ config:
   credential_encryption_key: "env:JOBHUNTER_ENCRYPTION_KEY"  # From SecretsManager
 
   # Default criteria (loaded on first start if database is empty)
-  # Users can customize via @jobhunter-service set-criteria commands
+  # Users can customize via @jobhunter set-criteria commands
   # These are just starting templates
   default_criteria:
     - {type: "keyword", value: "python", weight: 10}
@@ -531,17 +531,17 @@ config:
 - **Output example**:
   ```
   ============================================================
-  jobhunter-service: 🚀 Starting Daily Scrape Workflow
+  jobhunter: 🚀 Starting Daily Scrape Workflow
   ============================================================
 
   ============================================================
-  jobhunter-service: ✨ Daily Scrape Workflow Complete
-  jobhunter-service:    • Companies scraped: 1
-  jobhunter-service:    • Total jobs found: 62
-  jobhunter-service:    • New jobs: 0
-  jobhunter-service:    • High-scoring matches: 27
-  jobhunter-service:    • Deep scraped: 20
-  jobhunter-service:    • Time elapsed: 1.4 minutes
+  jobhunter: ✨ Daily Scrape Workflow Complete
+  jobhunter:    • Companies scraped: 1
+  jobhunter:    • Total jobs found: 62
+  jobhunter:    • New jobs: 0
+  jobhunter:    • High-scoring matches: 27
+  jobhunter:    • Deep scraped: 20
+  jobhunter:    • Time elapsed: 1.4 minutes
   ============================================================
   ```
 
@@ -882,89 +882,89 @@ Match Reasons: [same criteria], freshness_bonus:+5 (5 days old)
 **User Commands (via @ routing):**
 ```bash
 # Company Management
-@jobhunter-service add-company "Anthropic" "https://www.anthropic.com/careers"
-@jobhunter-service add-company "OpenAI" "https://openai.com/careers" "Greenhouse parser"
-@jobhunter-service add-company "Workday Portal" "https://workday.example.com/careers"
-@jobhunter-service list-companies                # Shows auth status per company
-@jobhunter-service remove-company "Anthropic"
-@jobhunter-service remove-company 5              # By ID
+@jobhunter add-company "Anthropic" "https://www.anthropic.com/careers"
+@jobhunter add-company "OpenAI" "https://openai.com/careers" "Greenhouse parser"
+@jobhunter add-company "Workday Portal" "https://workday.example.com/careers"
+@jobhunter list-companies                # Shows auth status per company
+@jobhunter remove-company "Anthropic"
+@jobhunter remove-company 5              # By ID
 
 # Authentication Management (Phase 4.5)
-@jobhunter-service set-credentials 5 form "myemail@example.com" "mypassword" "https://workday.example.com/login"
-@jobhunter-service set-credentials 7 basic "username" "password"
-@jobhunter-service test-auth 5                   # Test if credentials work
-@jobhunter-service remove-credentials 5          # Delete stored credentials
+@jobhunter set-credentials 5 form "myemail@example.com" "mypassword" "https://workday.example.com/login"
+@jobhunter set-credentials 7 basic "username" "password"
+@jobhunter test-auth 5                   # Test if credentials work
+@jobhunter remove-credentials 5          # Delete stored credentials
 
 # Criteria Management (Phase 3 - Unified Model)
 # Simple criteria (single value matching)
-@jobhunter-service add-criteria python simple 20
-@jobhunter-service add-criteria remote simple 15
-@jobhunter-service add-criteria fastapi simple 10
-@jobhunter-service add-criteria senior simple 10
+@jobhunter add-criteria python simple 20
+@jobhunter add-criteria remote simple 15
+@jobhunter add-criteria fastapi simple 10
+@jobhunter add-criteria senior simple 10
 
 # Group criteria with OR matching (match any value)
-@jobhunter-service add-criteria geography group-any 15
-@jobhunter-service add-criteria-value geography "US West"
-@jobhunter-service add-criteria-value geography "US East"
-@jobhunter-service add-criteria-value geography "Latin America"
+@jobhunter add-criteria geography group-any 15
+@jobhunter add-criteria-value geography "US West"
+@jobhunter add-criteria-value geography "US East"
+@jobhunter add-criteria-value geography "Latin America"
 
 # Group criteria with tiered matching (preference levels)
-@jobhunter-service add-criteria department group-tiered 0
-@jobhunter-service add-criteria-value department "Sales Engineering" preferred 20
-@jobhunter-service add-criteria-value department Marketing preferred 15
-@jobhunter-service add-criteria-value department "Customer Success" acceptable 10
-@jobhunter-service add-criteria-value department "IT Support" undesirable -10
+@jobhunter add-criteria department group-tiered 0
+@jobhunter add-criteria-value department "Sales Engineering" preferred 20
+@jobhunter add-criteria-value department Marketing preferred 15
+@jobhunter add-criteria-value department "Customer Success" acceptable 10
+@jobhunter add-criteria-value department "IT Support" undesirable -10
 
 # List all criteria (simple and groups)
-@jobhunter-service list-criteria
+@jobhunter list-criteria
 
 # Remove criteria
-@jobhunter-service remove-criteria 1                   # Remove by ID (use list-criteria to see IDs)
-@jobhunter-service remove-criteria-value geography "US East"  # Remove value from group
+@jobhunter remove-criteria 1                   # Remove by ID (use list-criteria to see IDs)
+@jobhunter remove-criteria-value geography "US East"  # Remove value from group
 
 # Testing & Validation
-@jobhunter-service test-criteria "Senior Sales Engineer - Remote, US West - $150k - FastAPI"
+@jobhunter test-criteria "Senior Sales Engineer - Remote, US West - $150k - FastAPI"
 # Returns: Score: 75/100
 #          Simple matches: remote (+15), fastapi (+10), senior (+10)
 #          Group matches: geography "US West" (+15), department "Sales Engineering" (+20)
 #          Total: 70 pts → HIGH PRIORITY MATCH
 
 # Schedule Management (Phase 7)
-@jobhunter-service add-schedule "09:00"                    # Add 9 AM run
-@jobhunter-service add-schedule "13:00"                    # Add 1 PM run
-@jobhunter-service add-schedule "17:00"                    # Add 5 PM run
-@jobhunter-service add-schedule "21:00" "America/Chicago"  # Different timezone
-@jobhunter-service list-schedules                          # Show all run times
-@jobhunter-service remove-schedule 2                       # Remove by ID
-@jobhunter-service disable-schedule 3                      # Pause schedule
-@jobhunter-service enable-schedule 3                       # Resume schedule
+@jobhunter add-schedule "09:00"                    # Add 9 AM run
+@jobhunter add-schedule "13:00"                    # Add 1 PM run
+@jobhunter add-schedule "17:00"                    # Add 5 PM run
+@jobhunter add-schedule "21:00" "America/Chicago"  # Different timezone
+@jobhunter list-schedules                          # Show all run times
+@jobhunter remove-schedule 2                       # Remove by ID
+@jobhunter disable-schedule 3                      # Pause schedule
+@jobhunter enable-schedule 3                       # Resume schedule
 
 # Freshness Management (Phase 8)
-@jobhunter-service list-new-jobs                           # Show only NEW jobs (is_new=1)
-@jobhunter-service list-stale-jobs 7                       # Show jobs >7 days old
-@jobhunter-service list-stale-jobs 30                      # Show jobs >30 days old
-@jobhunter-service reset-freshness                         # Mark all as not new
+@jobhunter list-new-jobs                           # Show only NEW jobs (is_new=1)
+@jobhunter list-stale-jobs 7                       # Show jobs >7 days old
+@jobhunter list-stale-jobs 30                      # Show jobs >30 days old
+@jobhunter reset-freshness                         # Mark all as not new
 
 # Operations
-@jobhunter-service run-now          # Trigger immediate scrape (manual)
-@jobhunter-service matches          # Show recent matches (top 20, prioritizes NEW)
-@jobhunter-service matches 50       # Show top 50
-@jobhunter-service status           # Service health + next run time
-@jobhunter-service help             # Command reference
+@jobhunter run-now          # Trigger immediate scrape (manual)
+@jobhunter matches          # Show recent matches (top 20, prioritizes NEW)
+@jobhunter matches 50       # Show top 50
+@jobhunter status           # Service health + next run time
+@jobhunter help             # Command reference
 ```
 
 **Response Examples:**
 
 ```bash
 # add-company response (with auth detection)
-@jobhunter-service add-company "Workday Portal" "https://workday.example.com/careers"
+@jobhunter add-company "Workday Portal" "https://workday.example.com/careers"
 
 ✅ Added company: Workday Portal (ID: 8)
 ⚠️ Authentication required (form-based login detected)
-To configure: @jobhunter-service set-credentials 8 form <username> <password> <login_url>
+To configure: @jobhunter set-credentials 8 form <username> <password> <login_url>
 
 # set-credentials response
-@jobhunter-service set-credentials 8 form "user@example.com" "mypassword" "https://workday.example.com/login"
+@jobhunter set-credentials 8 form "user@example.com" "mypassword" "https://workday.example.com/login"
 
 ✅ Credentials stored for company 8 (Workday Portal)
 Auth type: form-based login
@@ -973,7 +973,7 @@ Testing authentication...
 Next scrape will use these credentials
 
 # test-auth response (success)
-@jobhunter-service test-auth 8
+@jobhunter test-auth 8
 
 🔐 Testing authentication for Workday Portal...
 ✅ Authentication successful
@@ -981,11 +981,11 @@ Session valid for: 3600 seconds (1 hour)
 Last successful auth: 2026-02-01 14:30:00
 
 # test-auth response (failure)
-@jobhunter-service test-auth 8
+@jobhunter test-auth 8
 
 🔐 Testing authentication for Workday Portal...
 ❌ Authentication failed: Invalid credentials
-Please update: @jobhunter-service set-credentials 8 form <username> <password> <login_url>
+Please update: @jobhunter set-credentials 8 form <username> <password> <login_url>
 
 # list-companies response (with auth status)
 📋 Active Companies (5)
@@ -1005,7 +1005,7 @@ Please update: @jobhunter-service set-credentials 8 form <username> <password> <
    URL: https://internal.example.com/careers
    Scraper: Generic | Never scraped
    Auth status: ⚠️ Credentials needed
-   Configure: @jobhunter-service set-credentials 3 basic <username> <password>
+   Configure: @jobhunter set-credentials 3 basic <username> <password>
 
 4. **OpenAI** ✅ Public
    URL: https://openai.com/careers
@@ -1265,7 +1265,7 @@ test_telegram_notification()        # Delivery verification
 
 **Diagnostic Commands:**
 ```bash
-@jobhunter-service status
+@jobhunter status
 # Returns:
 # - Next scrape time (calculated from active schedules)
 # - All scheduled run times (e.g., 09:00, 13:00, 17:00)
@@ -1389,7 +1389,7 @@ Users can manually tune criteria weights based on results, which is a form of "m
 2. Create basic `jobhunter_service.py` skeleton
    - Extend BaseService
    - Basic health check
-3. Create `jobhunter-service.yaml` config
+3. Create `jobhunter.yaml` config
    - Database path, default schedules, default criteria template
 4. Test database initialization and service lifecycle
 5. Verify default criteria and schedules loaded
@@ -1456,33 +1456,33 @@ Users can manually tune criteria weights based on results, which is a form of "m
 **Command Examples (Unified Criteria Model):**
 ```bash
 # Add simple criteria (single-value matching)
-@jobhunter-service add-criteria python simple 20
-@jobhunter-service add-criteria remote simple 15
-@jobhunter-service add-criteria fastapi simple 10
-@jobhunter-service add-criteria senior simple 10
+@jobhunter add-criteria python simple 20
+@jobhunter add-criteria remote simple 15
+@jobhunter add-criteria fastapi simple 10
+@jobhunter add-criteria senior simple 10
 
 # Create group-any criterion (match any value, OR logic)
-@jobhunter-service add-criteria department group-any 15
-@jobhunter-service add-criteria-value department sales
-@jobhunter-service add-criteria-value department marketing
-@jobhunter-service add-criteria-value department "business development"
+@jobhunter add-criteria department group-any 15
+@jobhunter add-criteria-value department sales
+@jobhunter add-criteria-value department marketing
+@jobhunter add-criteria-value department "business development"
 
 # Create group-tiered criterion (preference levels)
-@jobhunter-service add-criteria geography group-tiered 0
-@jobhunter-service add-criteria-value geography "Latin America" preferred 20
-@jobhunter-service add-criteria-value geography Remote preferred 20
-@jobhunter-service add-criteria-value geography "US East" acceptable 5
-@jobhunter-service add-criteria-value geography "US West" acceptable 5
-@jobhunter-service add-criteria-value geography "On-site only" undesirable -10
+@jobhunter add-criteria geography group-tiered 0
+@jobhunter add-criteria-value geography "Latin America" preferred 20
+@jobhunter add-criteria-value geography Remote preferred 20
+@jobhunter add-criteria-value geography "US East" acceptable 5
+@jobhunter add-criteria-value geography "US West" acceptable 5
+@jobhunter add-criteria-value geography "On-site only" undesirable -10
 
 # Create group-any criterion (tech stack flexibility)
-@jobhunter-service add-criteria tech_stack group-any 10
-@jobhunter-service add-criteria-value tech_stack FastAPI
-@jobhunter-service add-criteria-value tech_stack Django
-@jobhunter-service add-criteria-value tech_stack Flask
+@jobhunter add-criteria tech_stack group-any 10
+@jobhunter add-criteria-value tech_stack FastAPI
+@jobhunter add-criteria-value tech_stack Django
+@jobhunter add-criteria-value tech_stack Flask
 
 # List all criteria (shows both simple and groups)
-@jobhunter-service list-criteria
+@jobhunter list-criteria
 # Output:
 #   🎯 Active Search Criteria
 #
@@ -1511,12 +1511,12 @@ Users can manually tune criteria weights based on results, which is a form of "m
 #       - On-site only (-10 pts) (ID: 8)
 
 # Remove criteria
-@jobhunter-service remove-criteria 1                        # Remove simple criterion by ID
-@jobhunter-service remove-criteria 5                        # Remove entire group by ID
-@jobhunter-service remove-criteria-value geography "US East"  # Remove value from group
+@jobhunter remove-criteria 1                        # Remove simple criterion by ID
+@jobhunter remove-criteria 5                        # Remove entire group by ID
+@jobhunter remove-criteria-value geography "US East"  # Remove value from group
 
 # Test criteria against sample job text
-@jobhunter-service test-criteria "Senior Sales Engineer - Remote, Latin America - $150k - FastAPI backend"
+@jobhunter test-criteria "Senior Sales Engineer - Remote, Latin America - $150k - FastAPI backend"
 # Output:
 #   Test Criteria Results
 #   Sample Job: Senior Sales Engineer - Remote, Latin America - $150k - FastAPI backend
@@ -1739,7 +1739,7 @@ Many companies restrict career pages behind authentication (Workday, internal po
            if auth_info['required']:
                self.logger.warning(
                    f"{company_name}: Auth required ({auth_info['auth_type']}). "
-                   f"Use: @jobhunter-service set-credentials {company_id}"
+                   f"Use: @jobhunter set-credentials {company_id}"
                )
                return []  # Skip for now, needs manual setup
 
@@ -1791,8 +1791,8 @@ Many companies restrict career pages behind authentication (Workday, internal po
        Store authentication credentials for a company.
 
        Usage:
-           @jobhunter-service set-credentials <company_id> <auth_type> <username> <password>
-           @jobhunter-service set-credentials <company_id> form <username> <password> <login_url>
+           @jobhunter set-credentials <company_id> <auth_type> <username> <password>
+           @jobhunter set-credentials <company_id> form <username> <password> <login_url>
        """
        company_id, auth_type, username, password = args[0:4]
        login_url = args[4] if len(args) > 4 else None
@@ -1838,27 +1838,27 @@ Many companies restrict career pages behind authentication (Workday, internal po
 **Command Examples:**
 ```bash
 # Add company (system detects if auth is needed)
-@jobhunter-service add-company "Anthropic Internal" "https://workday.anthropic.com/careers"
+@jobhunter add-company "Anthropic Internal" "https://workday.anthropic.com/careers"
 # Response: ⚠️ Auth required (form). Use set-credentials to configure.
 
 # Set credentials for form-based login
-@jobhunter-service set-credentials 5 form "myemail@example.com" "mypassword" "https://workday.anthropic.com/login"
+@jobhunter set-credentials 5 form "myemail@example.com" "mypassword" "https://workday.anthropic.com/login"
 # Response: ✅ Credentials stored for company 5 (form auth)
 
 # Set credentials for HTTP Basic Auth
-@jobhunter-service set-credentials 7 basic "username" "password"
+@jobhunter set-credentials 7 basic "username" "password"
 # Response: ✅ Credentials stored for company 7 (basic auth)
 
 # Test authentication
-@jobhunter-service test-auth 5
+@jobhunter test-auth 5
 # Response: ✅ Authentication successful OR ❌ Auth failed: Invalid credentials
 
 # Remove credentials (if changed or company removed)
-@jobhunter-service remove-credentials 5
+@jobhunter remove-credentials 5
 # Response: ✅ Credentials removed
 
 # List companies with auth status
-@jobhunter-service list-companies
+@jobhunter list-companies
 # Response shows auth_type for each:
 #   1. Anthropic (public)
 #   2. Workday Portal (form auth - configured ✅)
@@ -1911,7 +1911,7 @@ def _scrape_company_safe(company_id, company_name, url):
         # Notify user via Telegram
         self._send_notification(
             f"⚠️ {company_name}: Authentication failed. "
-            f"Check credentials with: @jobhunter-service test-auth {company_id}"
+            f"Check credentials with: @jobhunter test-auth {company_id}"
         )
         return []  # Continue with other companies
 ```
@@ -2143,13 +2143,13 @@ def update_job_details(self, job_id: int, description: str = None,
 
 ```bash
 # Deep scrape matched jobs (renamed from deep-scrape-matches)
-@jobhunter-service deep-match [min_score] [limit]
+@jobhunter deep-match [min_score] [limit]
 
 # Example: Deep scrape top 10 jobs with score >= 70
-@jobhunter-service deep-match 70 10
+@jobhunter deep-match 70 10
 
 # Default: min_score=60, limit=50
-@jobhunter-service deep-match
+@jobhunter deep-match
 ```
 
 **Implementation Status: ✅ COMPLETE (2026-02-02)**
@@ -2216,8 +2216,8 @@ class TestPhase5_5DeepScraping:
 - Background daemon thread running continuously
 - Multi-timezone support (9am, 1pm, 5pm ET default)
 - Complete workflow: scrape → score → deep-match
-- Manual trigger: `@jobhunter-service run-now`
-- Job details: `@jobhunter-service score-jobs <job_id>`
+- Manual trigger: `@jobhunter run-now`
+- Job details: `@jobhunter score-jobs <job_id>`
 - SHA256 hash-based deduplication
 - Graceful shutdown with event signals
 
@@ -2258,7 +2258,7 @@ class TestPhase5_5DeepScraping:
    - `_handle_enable_schedule(sender, args, correlation_id)` → Enable time
 5. Support manual runs when no schedules exist
    - If `run_schedules` table is empty, scheduler sleeps and waits for manual trigger
-   - `@jobhunter-service run-now` works regardless of schedule
+   - `@jobhunter run-now` works regardless of schedule
 6. Initialization logic
    - On first start, load default schedules from config
    - If config has single `scrape_time`, convert to list format
@@ -2267,13 +2267,13 @@ class TestPhase5_5DeepScraping:
 **Command Examples:**
 ```bash
 # Add scheduled run times (HH:MM format, 24-hour)
-@jobhunter-service add-schedule "09:00"                    # 9 AM daily
-@jobhunter-service add-schedule "13:00"                    # 1 PM daily
-@jobhunter-service add-schedule "17:00"                    # 5 PM daily
-@jobhunter-service add-schedule "21:00" "America/Chicago"  # 9 PM Central
+@jobhunter add-schedule "09:00"                    # 9 AM daily
+@jobhunter add-schedule "13:00"                    # 1 PM daily
+@jobhunter add-schedule "17:00"                    # 5 PM daily
+@jobhunter add-schedule "21:00" "America/Chicago"  # 9 PM Central
 
 # List all scheduled run times
-@jobhunter-service list-schedules
+@jobhunter list-schedules
 # Returns:
 #   Active Schedules (3):
 #   1. 09:00 America/New_York (next run: 2026-02-02 09:00:00)
@@ -2283,16 +2283,16 @@ class TestPhase5_5DeepScraping:
 #   Next scrape: Today at 5:00 PM (in 3h 24m)
 
 # Remove schedule by ID
-@jobhunter-service remove-schedule 2                       # Remove 1 PM run
+@jobhunter remove-schedule 2                       # Remove 1 PM run
 
 # Disable temporarily (keeps in database)
-@jobhunter-service disable-schedule 3                      # Pause 5 PM run
+@jobhunter disable-schedule 3                      # Pause 5 PM run
 
 # Re-enable disabled schedule
-@jobhunter-service enable-schedule 3                       # Resume 5 PM run
+@jobhunter enable-schedule 3                       # Resume 5 PM run
 
 # Manual run (works even with no schedules)
-@jobhunter-service run-now
+@jobhunter run-now
 ```
 
 **Response Examples:**
@@ -2319,12 +2319,12 @@ Disabled (1):
   4. 21:00 EST (America/New_York) [DISABLED]
 
 Next Scrape: Today at 5:00 PM (in 3h 24m)
-Manual runs: @jobhunter-service run-now
+Manual runs: @jobhunter run-now
 
 # No schedules configured
 ⚠️ No scheduled run times configured
-To add a schedule: @jobhunter-service add-schedule "09:00"
-To run manually: @jobhunter-service run-now
+To add a schedule: @jobhunter add-schedule "09:00"
+To run manually: @jobhunter run-now
 ```
 
 **Scheduler Logic (Updated):**
@@ -2534,15 +2534,15 @@ This phase implements **NEW job detection** to prioritize fresh postings that we
 **Command Examples:**
 ```bash
 # List only NEW jobs from latest scrape
-@jobhunter-service list-new-jobs
+@jobhunter list-new-jobs
 # Returns: Jobs marked is_new=1, sorted by match score
 
 # List stale jobs (seen for >7 days, still active)
-@jobhunter-service list-stale-jobs 7
+@jobhunter list-stale-jobs 7
 # Returns: Jobs first_seen >7 days ago, might be filled
 
 # Force re-check freshness (mark all as not new, re-scrape to find actual new ones)
-@jobhunter-service reset-freshness
+@jobhunter reset-freshness
 ```
 
 **Enhanced Notification Format:**
@@ -2736,7 +2736,7 @@ def _send_notifications(matches):
    - Example: ~$0.05-0.10 per day
 
 3. **User-Triggered Analysis**
-   - Manual command: `@jobhunter-service analyze-job <job_id>`
+   - Manual command: `@jobhunter analyze-job <job_id>`
    - On-demand deep dive for specific opportunities
    - Cost: Pay only when explicitly requested
 
@@ -2792,19 +2792,19 @@ def _analyze_job_with_ai(self, job_text: str, criteria_summary: str) -> Dict[str
 
 ```bash
 # Enable/disable AI analysis
-@jobhunter-service set-ai-analysis <on|off>
+@jobhunter set-ai-analysis <on|off>
 
 # Configure AI analysis mode
-@jobhunter-service set-ai-mode <two-pass|daily-summary|manual>
+@jobhunter set-ai-mode <two-pass|daily-summary|manual>
 
 # Manually analyze a specific job
-@jobhunter-service analyze-job <job_id>
+@jobhunter analyze-job <job_id>
 
 # Batch analyze recent matches
-@jobhunter-service analyze-matches [limit]
+@jobhunter analyze-matches [limit]
 
 # Show AI analysis cost stats
-@jobhunter-service ai-stats
+@jobhunter ai-stats
 ```
 
 **Database Changes:**
@@ -2828,10 +2828,10 @@ CREATE TABLE ai_analysis_log (
 );
 ```
 
-**Configuration (config/services/jobhunter-service.yaml):**
+**Configuration (config/services/jobhunter.yaml):**
 
 ```yaml
-jobhunter-service:
+jobhunter:
   ai_analysis:
     enabled: true
     mode: "two-pass"  # two-pass | daily-summary | manual
@@ -3096,23 +3096,23 @@ def test_ai_analysis():
 ## Appendix A: Example Scrape Execution
 
 ```
-2026-01-30 09:00:00 - INFO - jobhunter-service: Starting daily scrape
-2026-01-30 09:00:00 - INFO - jobhunter-service: Loaded 5 active companies
-2026-01-30 09:00:00 - INFO - jobhunter-service: Loaded search criteria (5 keywords, 5 locations)
+2026-01-30 09:00:00 - INFO - jobhunter: Starting daily scrape
+2026-01-30 09:00:00 - INFO - jobhunter: Loaded 5 active companies
+2026-01-30 09:00:00 - INFO - jobhunter: Loaded search criteria (5 keywords, 5 locations)
 
-2026-01-30 09:00:01 - INFO - jobhunter-service: Scraping Anthropic (https://www.anthropic.com/careers)
-2026-01-30 09:00:03 - INFO - jobhunter-service: Anthropic - 12 jobs found, 2 new
-2026-01-30 09:00:03 - INFO - jobhunter-service: Job #1 scored 84/100 - MATCH
-2026-01-30 09:00:03 - INFO - jobhunter-service: Job #2 scored 45/100 - below threshold
+2026-01-30 09:00:01 - INFO - jobhunter: Scraping Anthropic (https://www.anthropic.com/careers)
+2026-01-30 09:00:03 - INFO - jobhunter: Anthropic - 12 jobs found, 2 new
+2026-01-30 09:00:03 - INFO - jobhunter: Job #1 scored 84/100 - MATCH
+2026-01-30 09:00:03 - INFO - jobhunter: Job #2 scored 45/100 - below threshold
 
-2026-01-30 09:00:06 - INFO - jobhunter-service: Scraping OpenAI (https://openai.com/careers)
-2026-01-30 09:00:08 - INFO - jobhunter-service: OpenAI - 8 jobs found, 1 new
-2026-01-30 09:00:08 - INFO - jobhunter-service: Job #3 scored 72/100 - MATCH
+2026-01-30 09:00:06 - INFO - jobhunter: Scraping OpenAI (https://openai.com/careers)
+2026-01-30 09:00:08 - INFO - jobhunter: OpenAI - 8 jobs found, 1 new
+2026-01-30 09:00:08 - INFO - jobhunter: Job #3 scored 72/100 - MATCH
 
-2026-01-30 09:00:15 - INFO - jobhunter-service: Scrape complete
-2026-01-30 09:00:15 - INFO - jobhunter-service: Summary: 5 companies, 20 jobs, 3 new, 2 matches
-2026-01-30 09:00:15 - INFO - jobhunter-service: Sending 2 notifications to Telegram
-2026-01-30 09:00:16 - INFO - jobhunter-service: ✅ Daily scrape complete in 16 seconds
+2026-01-30 09:00:15 - INFO - jobhunter: Scrape complete
+2026-01-30 09:00:15 - INFO - jobhunter: Summary: 5 companies, 20 jobs, 3 new, 2 matches
+2026-01-30 09:00:15 - INFO - jobhunter: Sending 2 notifications to Telegram
+2026-01-30 09:00:16 - INFO - jobhunter: ✅ Daily scrape complete in 16 seconds
 ```
 
 ---

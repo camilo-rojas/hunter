@@ -205,7 +205,7 @@
 - **Assertions:**
   - Workflow method called
   - Response indicates completion
-- **Command:** `@jobhunter-service run-now`
+- **Command:** `@jobhunter run-now`
 - **Expected Response:** "Workflow Complete" or "Manual Workflow Trigger"
 
 #### `test_run_now_command_no_companies()`
@@ -250,7 +250,7 @@
           'review': 50
       }
   }
-  service = JobHunterService('jobhunter-service', config)
+  service = JobHunterService('jobhunter', config)
   assert service.threshold_high_priority == 80  # Custom value
   ```
 
@@ -263,7 +263,7 @@
 - **Example:**
   ```python
   config = {'scoring_thresholds': {}}  # Empty
-  service = JobHunterService('jobhunter-service', config)
+  service = JobHunterService('jobhunter', config)
   assert service.threshold_high_priority == 70  # Default
   ```
 
@@ -297,7 +297,7 @@
   - Title displayed
   - URL displayed
   - Location displayed (or "No location")
-- **Command:** `@jobhunter-service score-jobs <job_id>`
+- **Command:** `@jobhunter score-jobs <job_id>`
 
 #### `test_job_details_with_salary()`
 - **What it tests:** Salary information included when available

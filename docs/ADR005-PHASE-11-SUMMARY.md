@@ -46,7 +46,7 @@ Phase 11 implements AI-powered job analysis using Claude API to provide intellig
 
 ## Implementation Details
 
-### Configuration (config/services/jobhunter-service.yaml)
+### Configuration (config/services/jobhunter.yaml)
 
 ```yaml
 ai_analysis:
@@ -369,7 +369,7 @@ New jobs (last 24h): 3
 ## Files Modified
 
 ### Configuration
-- `config/services/jobhunter-service.yaml` - AI config, prompts, thresholds
+- `config/services/jobhunter.yaml` - AI config, prompts, thresholds
 
 ### Service Code
 - `src/robotray/services/jobhunter_service.py` - AI analysis, summary generation, workflow integration
@@ -379,7 +379,7 @@ New jobs (last 24h): 3
 
 ### Documentation
 - `docs/ADR005-PHASE-11-SUMMARY.md` - This document
-- `docs/ADR005-jobhunter-service.md` - Updated Phase 11 section
+- `docs/ADR005-jobhunter.md` - Updated Phase 11 section
 
 ### Tests
 - `tests/unit/test_services/test_jobhunter_service.py` - AI analysis tests (to be added)

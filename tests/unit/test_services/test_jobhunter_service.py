@@ -275,11 +275,11 @@ class TestJobHunterServiceLifecycle:
     @pytest.fixture
     def service(self, service_config):
         """Create JobHunter service instance."""
-        return JobHunterService("jobhunter-service", service_config)
+        return JobHunterService("jobhunter", service_config)
 
     def test_service_initialization(self, service):
         """Test service initialization."""
-        assert service.name == "jobhunter-service"
+        assert service.name == "jobhunter"
         assert service.db_manager is None  # Not initialized until start_service
 
     def test_service_start(self, service):
@@ -350,7 +350,7 @@ class TestJobHunterMessageHandling:
             'default_criteria': [],
             'default_schedules': []
         }
-        svc = JobHunterService("jobhunter-service", config)
+        svc = JobHunterService("jobhunter", config)
         svc.start_service()
         yield svc
         svc.stop_service()
@@ -364,7 +364,7 @@ class TestJobHunterMessageHandling:
         # Create help command message
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service",
+            target_service="jobhunter",
             priority=MessagePriority.NORMAL,
             correlation_id="test-123"
         )
@@ -400,7 +400,7 @@ class TestJobHunterMessageHandling:
         # Create add-company command (no quotes needed - use underscores for multi-word names)
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": 'add-company TestCorp https://example.com/careers'},
@@ -430,7 +430,7 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": "list-companies"},
@@ -454,7 +454,7 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": "list-companies"},
@@ -482,7 +482,7 @@ class TestJobHunterMessageHandling:
         # Remove it
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": f"remove-company {company_id}"},
@@ -506,7 +506,7 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": "status"},
@@ -530,7 +530,7 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": "invalid-command"},
@@ -552,7 +552,7 @@ class TestJobHunterMessageHandling:
         # Missing arguments
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": "add-company"},
@@ -588,7 +588,7 @@ class TestJobHunterCriteriaManagement:
             'default_criteria': [],
             'default_schedules': []
         }
-        svc = JobHunterService("jobhunter-service", config)
+        svc = JobHunterService("jobhunter", config)
         svc.start_service()
         yield svc
         svc.stop_service()
@@ -600,7 +600,7 @@ class TestJobHunterCriteriaManagement:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": command},
@@ -923,7 +923,7 @@ class TestJobHunterRangeSupport:
             'default_criteria': [],
             'default_schedules': []
         }
-        svc = JobHunterService("jobhunter-service", config)
+        svc = JobHunterService("jobhunter", config)
         svc.start_service()
         yield svc
         svc.stop_service()
@@ -935,7 +935,7 @@ class TestJobHunterRangeSupport:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service"
+            target_service="jobhunter"
         )
         message = SecureMessage(
             payload={"content": command},
@@ -1130,7 +1130,7 @@ class TestPhase5_5DeepScraping:
         """Create JobHunter service with temporary database."""
         from robotray.services.jobhunter_service import JobHunterService
         service = JobHunterService(
-            name="jobhunter-service",
+            name="jobhunter",
             config={"database_path": temp_db}
         )
         service.message_broker = Mock()
@@ -1146,7 +1146,7 @@ class TestPhase5_5DeepScraping:
         message = SecureMessage(
             metadata=MessageMetadata(
                 sender_service='test-channel',
-                target_service='jobhunter-service',
+                target_service='jobhunter',
                 correlation_id='test-123',
                 user_id=1,
                 username='test-user',
@@ -1523,7 +1523,7 @@ class TestPhase6_Scheduler:
                 'low_priority': 0
             }
         }
-        service = JobHunterService('jobhunter-service', config)
+        service = JobHunterService('jobhunter', config)
         
         # Initialize database without starting threads
         service.db_manager = JobHunterDatabaseManager(temp_db)
@@ -1543,7 +1543,7 @@ class TestPhase6_Scheduler:
         message = SecureMessage(
             metadata=MessageMetadata(
                 sender_service='test-channel',
-                target_service='jobhunter-service',
+                target_service='jobhunter',
                 correlation_id='test-123',
                 user_id=1,
                 username='test-user',
@@ -1788,7 +1788,7 @@ class TestPhase6_Scheduler:
                 'low_priority': 0
             }
         }
-        service = JobHunterService('jobhunter-service', config)
+        service = JobHunterService('jobhunter', config)
         
         assert service.threshold_high_priority == 80
         assert service.threshold_good_match == 65
@@ -1800,7 +1800,7 @@ class TestPhase6_Scheduler:
             'database_path': temp_db,
             'scoring_thresholds': {}  # Empty config
         }
-        service = JobHunterService('jobhunter-service', config)
+        service = JobHunterService('jobhunter', config)
         
         # Should use defaults
         assert service.threshold_high_priority == 70
@@ -2091,7 +2091,7 @@ class TestPhase7_ScheduleManagement:
             'database_path': temp_db,
             'default_schedules': []
         }
-        service = JobHunterService('jobhunter-service', config)
+        service = JobHunterService('jobhunter', config)
 
         # Initialize database without starting threads
         service.db_manager = JobHunterDatabaseManager(temp_db)
@@ -2110,7 +2110,7 @@ class TestPhase7_ScheduleManagement:
         message = SecureMessage(
             metadata=MessageMetadata(
                 sender_service='test-channel',
-                target_service='jobhunter-service',
+                target_service='jobhunter',
                 correlation_id='test-123',
                 user_id=1,
                 username='test-user',
@@ -2232,7 +2232,7 @@ class TestPhase8_FreshnessDetection:
             'database_path': temp_db,
             'default_criteria': []
         }
-        service = JobHunterService('jobhunter-service', config)
+        service = JobHunterService('jobhunter', config)
 
         service.db_manager = JobHunterDatabaseManager(temp_db)
         service.db_manager.initialize_database()
@@ -2465,7 +2465,7 @@ class TestPhase9_Notifications:
             'min_match_score': 60,
             'max_notifications_per_run': 10
         }
-        service = JobHunterService('jobhunter-service', config)
+        service = JobHunterService('jobhunter', config)
 
         service.db_manager = JobHunterDatabaseManager(temp_db)
         service.db_manager.initialize_database()
@@ -2714,7 +2714,7 @@ class TestAIAnalysis:
                            lambda: mock_secrets)
         
         # Create service
-        service = JobHunterService("jobhunter-service", config)
+        service = JobHunterService("jobhunter", config)
         
         # Mock _send_response to avoid actual message sending
         service._send_response = Mock()
@@ -3478,7 +3478,7 @@ class TestRunHistoryCommands:
             'default_criteria': [],
             'default_schedules': []
         }
-        svc = JobHunterService("jobhunter-service", config)
+        svc = JobHunterService("jobhunter", config)
         svc.start_service()
         yield svc
         svc.stop_service()
@@ -3492,7 +3492,7 @@ class TestRunHistoryCommands:
         from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter-service",
+            target_service="jobhunter",
             priority=MessagePriority.NORMAL,
             correlation_id="test-hist"
         )
