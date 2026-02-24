@@ -44,7 +44,7 @@ from datetime import datetime, timezone, timedelta
 from bs4 import BeautifulSoup
 from pathlib import Path
 
-from anthropic import Anthropic, APIStatusError, NotFoundError
+from anthropic import Anthropic, APIStatusError, BadRequestError, NotFoundError
 
 from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
@@ -4002,6 +4002,16 @@ class JobHunterService(BaseService):
         for attempt in range(max_retries):
             try:
                 return client.messages.create(**kwargs)
+            except BadRequestError as e:
+                if "credit balance" in str(e):
+                    self.logger.warning(
+                        "jobhunter: ⚠️ Anthropic API credit balance too low. "
+                        "Disabling AI analysis for this session. "
+                        "Please fund your Anthropic account at https://console.anthropic.com/settings/plans"
+                    )
+                    self.ai_enabled = False
+                    raise
+                raise
             except NotFoundError as e:
                 # Model deprecated/removed — disable AI for this session to avoid log spam
                 model = kwargs.get('model', 'unknown')
@@ -4205,6 +4215,15 @@ Respond in JSON format:
                 self.logger.error(f"jobhunter: No result_text available - error before API call?")
             import traceback
             self.logger.error(f"jobhunter: Traceback:\n{traceback.format_exc()}")
+            return None
+        except BadRequestError as e:
+            if "credit balance" in str(e):
+                self.logger.warning(
+                    "jobhunter: ⚠️ Anthropic API credit balance too low — skipping AI analysis. "
+                    "Fund your account at https://console.anthropic.com/settings/plans"
+                )
+            else:
+                self.logger.error(f"jobhunter: AI analysis failed: {e}")
             return None
         except Exception as e:
             self.logger.error(f"jobhunter: AI analysis failed: {type(e).__name__}: {e}")
@@ -4462,6 +4481,15 @@ Then provide your curated selections with detailed analysis."""
 
             return summary_text
 
+        except BadRequestError as e:
+            if "credit balance" in str(e):
+                self.logger.warning(
+                    "jobhunter: ⚠️ Anthropic API credit balance too low — skipping hiring summary. "
+                    "Fund your account at https://console.anthropic.com/settings/plans"
+                )
+            else:
+                self.logger.error(f"jobhunter: Failed to generate hiring summary: {e}")
+            return None
         except Exception as e:
             self.logger.error(f"jobhunter: Failed to generate hiring summary: {type(e).__name__}: {e}")
             import traceback
