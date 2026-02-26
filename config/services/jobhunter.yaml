@@ -155,7 +155,7 @@ config:
   ai_analysis:
     enabled: true                        # Enable AI-powered job analysis
     provider: "openai"                   # "anthropic" or "openai" (OpenAI-compatible proxy)
-    base_url: "http://192.168.8.17:8000/v1"  # Only used with openai provider
+    base_url: "http://192.168.48.1:8100/v1"  # Forwarded via Windows host to 192.168.8.17:8000
     api_timeout: 120                     # LLM request timeout in seconds (default: 120)
     model: "claude-haiku-4-5-20251001"   # Fast, cost-effective model for individual job analysis
     summary_model: "claude-sonnet-4-20250514"  # Higher quality model for final hiring summary
