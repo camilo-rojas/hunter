@@ -4170,8 +4170,9 @@ class JobHunterService(BaseService):
                 - recommendation: "APPLY" | "REVIEW" | "SKIP"
             Returns None if AI is disabled or analysis fails.
         """
-        if not self.ai_enabled or not self.anthropic_client:
-            self.logger.warning(f"jobhunter: AI analysis skipped - enabled={self.ai_enabled}, client={self.anthropic_client is not None}")
+        llm_client = self._openai_client if self.ai_provider == "openai" else self.anthropic_client
+        if not self.ai_enabled or not llm_client:
+            self.logger.warning(f"jobhunter: AI analysis skipped - enabled={self.ai_enabled}, client={llm_client is not None}")
             return None
 
         try:
@@ -4429,7 +4430,8 @@ Respond in JSON format:
         Returns:
             Formatted message string, or None if generation fails
         """
-        if not self.ai_enabled or not self.anthropic_client or not approved_jobs:
+        llm_client = self._openai_client if self.ai_provider == "openai" else self.anthropic_client
+        if not self.ai_enabled or not llm_client or not approved_jobs:
             return None
 
         try:
