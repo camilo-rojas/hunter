@@ -79,7 +79,7 @@ config:
   verbose_logging: false               # Show detailed scraping progress (default: false for concise output)
 
   # Web scraping behavior
-  request_timeout: 30                  # HTTP request timeout (seconds)
+  request_timeout: 60                  # HTTP request timeout (seconds)
   rate_limit_delay: 3                  # Seconds between company scrapes
   max_retries: 3                       # Retry attempts for failed requests
   user_agent: "Mozilla/5.0 (compatible; JobHunterBot/1.0; +https://github.com/yourusername/robotray)"

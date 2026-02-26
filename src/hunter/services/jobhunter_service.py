@@ -101,6 +101,9 @@ class JobHunterService(BaseService):
         # Logging verbosity (default: false for concise executive summary)
         self.verbose_logging = self.config.get('verbose_logging', False)
 
+        # Web scraping timeout (seconds)
+        self.request_timeout = self.config.get('request_timeout', 30)
+
         # AI Analysis Configuration (Phase 11)
         ai_config = self.config.get('ai_analysis', {})
         self.ai_enabled = ai_config.get('enabled', False)
@@ -3011,7 +3014,7 @@ class JobHunterService(BaseService):
                     'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
                     'Accept': 'application/json'
                 }
-                response = requests.get(api_url, headers=headers, timeout=30)
+                response = requests.get(api_url, headers=headers, timeout=self.request_timeout)
 
                 if response.status_code == 200:
                     job_data = response.json()
@@ -3250,7 +3253,7 @@ class JobHunterService(BaseService):
                 'Accept': 'application/json'
             }
 
-            response = requests.get(api_url, headers=headers, timeout=30)
+            response = requests.get(api_url, headers=headers, timeout=self.request_timeout)
 
             if response.status_code != 200:
                 self.logger.warning(f"jobhunter: Lever API returned {response.status_code} for job {job_id}")
@@ -3412,7 +3415,7 @@ class JobHunterService(BaseService):
                         'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
                         'Accept': 'application/json'
                     }
-                    response = requests.get(api_url, headers=headers, timeout=30)
+                    response = requests.get(api_url, headers=headers, timeout=self.request_timeout)
 
                     if response.status_code == 200:
                         data = response.json()
@@ -3513,6 +3516,9 @@ class JobHunterService(BaseService):
                 self.logger.info(f"jobhunter: Greenhouse parser found {len(jobs)} jobs")
             return jobs
 
+        except requests.exceptions.Timeout:
+            self.logger.warning(f"jobhunter: Greenhouse API timed out ({self.request_timeout}s) — skipping")
+            return []
         except Exception as e:
             self.logger.error(f"jobhunter: Error in Greenhouse parser: {e}")
             import traceback
@@ -3661,6 +3667,9 @@ class JobHunterService(BaseService):
 
             return jobs
 
+        except requests.exceptions.Timeout:
+            self.logger.warning(f"jobhunter: Ashby API timed out ({self.request_timeout}s) — skipping")
+            return []
         except Exception as e:
             self.logger.error(f"jobhunter: Error in Ashby parser: {e}")
             import traceback
@@ -3709,7 +3718,7 @@ class JobHunterService(BaseService):
                 'Accept': 'application/json'
             }
 
-            response = requests.get(api_url, headers=headers, timeout=30)
+            response = requests.get(api_url, headers=headers, timeout=self.request_timeout)
 
             if response.status_code != 200:
                 self.logger.warning(f"jobhunter: Lever API returned {response.status_code}")
@@ -3760,6 +3769,9 @@ class JobHunterService(BaseService):
 
             return jobs
 
+        except requests.exceptions.Timeout as e:
+            self.logger.warning(f"jobhunter: Lever API timed out for {company_slug} ({self.request_timeout}s) — skipping")
+            return []
         except Exception as e:
             self.logger.error(f"jobhunter: Error in Lever parser: {e}")
             import traceback
