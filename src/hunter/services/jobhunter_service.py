@@ -4114,8 +4114,17 @@ class JobHunterService(BaseService):
     def _openai_create(self, client, **kwargs):
         """Convert Anthropic-style kwargs to OpenAI format and call API."""
         messages = list(kwargs.get("messages", []))
-        if "system" in kwargs:
-            messages.insert(0, {"role": "system", "content": kwargs["system"]})
+        if "system" in kwargs and kwargs["system"]:
+            # Prepend system context into first user message — some proxies
+            # drop {"role": "system"} messages and top-level system params.
+            system_text = kwargs["system"]
+            if messages and messages[0]["role"] == "user":
+                messages[0] = {
+                    "role": "user",
+                    "content": f"<system>\n{system_text}\n</system>\n\n{messages[0]['content']}",
+                }
+            else:
+                messages.insert(0, {"role": "user", "content": f"<system>\n{system_text}\n</system>"})
         return client.chat.completions.create(
             model=kwargs.get("model", self.ai_model),
             messages=messages,
