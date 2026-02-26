@@ -46,6 +46,11 @@ from pathlib import Path
 
 from anthropic import Anthropic, APIStatusError, BadRequestError, NotFoundError
 
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
 from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
 from robotray.core.messaging import SecureMessage, MessagePriority
@@ -92,6 +97,8 @@ class JobHunterService(BaseService):
         # AI Analysis Configuration (Phase 11)
         ai_config = self.config.get('ai_analysis', {})
         self.ai_enabled = ai_config.get('enabled', False)
+        self.ai_provider = ai_config.get('provider', 'anthropic')
+        self.ai_base_url = ai_config.get('base_url', None)
         self.ai_model = ai_config.get('model', 'claude-haiku-4-5-20251001')
         self.ai_summary_model = ai_config.get('summary_model', 'claude-sonnet-4-20250514')  # Sonnet for final summary
         self.ai_max_tokens = ai_config.get('max_tokens', 1000)
@@ -108,6 +115,7 @@ class JobHunterService(BaseService):
 
         # Initialize AI client if enabled
         self.anthropic_client: Optional[Anthropic] = None
+        self._openai_client = None
         self._cv_content: Optional[str] = None
         self._goal_content: Optional[str] = None
 
@@ -116,24 +124,37 @@ class JobHunterService(BaseService):
 
         if self.ai_enabled:
             try:
-                # Get API key from SecretsManager (same as ai)
                 self.secrets_manager = SecretsManager()
-                api_key = self.secrets_manager.get_secret("anthropic_api_key")
 
-                if not api_key:
-                    # Fallback to environment variable
-                    api_key = os.getenv("ANTHROPIC_API_KEY")
-                    self.logger.warning(
-                        "jobhunter: API key not found in SecretsManager, using environment variable"
-                    )
+                if self.ai_provider == 'openai':
+                    api_key = self._resolve_api_key("openai_api_key", "OPENAI_API_KEY")
+                    if api_key and OpenAI is not None:
+                        self._openai_client = OpenAI(api_key=api_key, base_url=self.ai_base_url)
+                        self.logger.info(
+                            f"jobhunter: AI analysis enabled (openai provider at {self.ai_base_url}), "
+                            f"model {self.ai_model}, min score: {self.ai_min_score}"
+                        )
+                    else:
+                        self.logger.error(
+                            "jobhunter: OpenAI provider selected but no API key or openai package missing."
+                        )
+                        self.ai_enabled = False
+                else:
+                    api_key = self._resolve_api_key("anthropic_api_key", "ANTHROPIC_API_KEY")
+                    if api_key:
+                        self.anthropic_client = Anthropic(api_key=api_key)
+                        self.logger.info(
+                            f"jobhunter: AI analysis enabled (anthropic provider), "
+                            f"model {self.ai_model}, min score: {self.ai_min_score}"
+                        )
+                    else:
+                        self.logger.error(
+                            "jobhunter: AI analysis enabled but no API key found. "
+                            "Set via @user set-secret anthropic_api_key <key>"
+                        )
+                        self.ai_enabled = False
 
-                if api_key:
-                    self.anthropic_client = Anthropic(api_key=api_key)
-                    self.logger.info(
-                        f"jobhunter: AI analysis enabled with model {self.ai_model}, "
-                        f"min score threshold: {self.ai_min_score}"
-                    )
-
+                if self.ai_enabled:
                     # Load CV content (cached in memory)
                     if self.cv_path.exists():
                         self._cv_content = self.cv_path.read_text()
@@ -159,19 +180,13 @@ class JobHunterService(BaseService):
                             "jobhunter: No search goal found. "
                             "Set one with: @jobhunter goal <your goal>"
                         )
-                else:
-                    self.logger.error(
-                        "jobhunter: AI analysis enabled but no API key found. "
-                        "Set via SecretsManager.set_secret('anthropic_api_key', 'sk-ant-...')"
-                    )
-                    self.ai_enabled = False
 
             except Exception as e:
                 self.logger.error(f"jobhunter: Failed to initialize AI client: {e}")
                 self.ai_enabled = False
 
         # Per-user client cache (ADR-006)
-        self._clients = {}  # user_id -> Anthropic client
+        self._clients = {}  # user_id -> client (Anthropic or OpenAI)
         self._user_db = None  # Lazy-initialized
 
         # Initialize database manager (will be initialized during start_service)
@@ -3980,40 +3995,71 @@ class JobHunterService(BaseService):
             self._user_db = UserDatabaseManager()
         return self._user_db
 
-    def _get_client(self, user_id: int = 0) -> Anthropic:
-        """Get Anthropic client for a user (per-user key or global fallback)."""
+    def _resolve_api_key(self, secret_key: str, env_var: str) -> Optional[str]:
+        """Resolve API key from per-user secrets, global SecretsManager, or env var."""
+        # Try per-user secret (admin user_id=1) — covers @user set-secret
+        try:
+            user_db = self._get_user_db()
+            value = user_db.get_user_secret(1, secret_key)
+            if value:
+                self.logger.info(f"jobhunter: Found {secret_key} via per-user secret")
+                return value
+            else:
+                self.logger.debug(f"jobhunter: No per-user secret found for {secret_key}")
+        except Exception as e:
+            self.logger.debug(f"jobhunter: Per-user secret lookup failed for {secret_key}: {e}")
+        # Try global SecretsManager
+        value = self.secrets_manager.get_secret(secret_key)
+        if value:
+            self.logger.debug(f"jobhunter: Found {secret_key} via global SecretsManager")
+            return value
+        # Try environment variable
+        value = os.getenv(env_var)
+        if value:
+            self.logger.debug(f"jobhunter: Found {secret_key} via env var {env_var}")
+        return value
+
+    def _get_client(self, user_id: int = 0):
+        """Get LLM client for a user (per-user key or global fallback)."""
+        secret_key = "openai_api_key" if self.ai_provider == "openai" else "anthropic_api_key"
+        default_client = self._openai_client if self.ai_provider == "openai" else self.anthropic_client
+
         if user_id and user_id not in self._clients:
             api_key = get_secret_for_user(
-                "anthropic_api_key",
+                secret_key,
                 user_id=user_id,
                 user_db=self._get_user_db(),
                 secrets_manager=self.secrets_manager,
             )
             if api_key:
-                self._clients[user_id] = Anthropic(api_key=api_key)
+                if self.ai_provider == "openai":
+                    self._clients[user_id] = OpenAI(api_key=api_key, base_url=self.ai_base_url)
+                else:
+                    self._clients[user_id] = Anthropic(api_key=api_key)
             else:
-                return self.anthropic_client  # Fall back to global client
-        return self._clients.get(user_id, self.anthropic_client)
+                return default_client
+        return self._clients.get(user_id, default_client)
 
-    def _call_anthropic_with_retry(self, user_id: int = 0, **kwargs) -> Any:
-        """Call Anthropic API with retry on 529 overloaded errors."""
+    def _call_llm_with_retry(self, user_id: int = 0, **kwargs) -> Any:
+        """Call LLM API with retry on overloaded/rate-limit errors."""
         client = self._get_client(user_id)
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                return client.messages.create(**kwargs)
+                if self.ai_provider == "openai":
+                    return self._openai_create(client, **kwargs)
+                else:
+                    return client.messages.create(**kwargs)
             except BadRequestError as e:
                 if "credit balance" in str(e):
                     self.logger.warning(
-                        "jobhunter: ⚠️ Anthropic API credit balance too low. "
-                        "Disabling AI analysis for this session. "
-                        "Please fund your Anthropic account at https://console.anthropic.com/settings/plans"
+                        "jobhunter: ⚠️ API credit balance too low. "
+                        "Disabling AI analysis for this session."
                     )
                     self.ai_enabled = False
                     raise
                 raise
             except NotFoundError as e:
-                # Model deprecated/removed — disable AI for this session to avoid log spam
                 model = kwargs.get('model', 'unknown')
                 self.logger.error(
                     f"jobhunter: Model '{model}' not found (deprecated?). "
@@ -4022,15 +4068,58 @@ class JobHunterService(BaseService):
                 self.ai_enabled = False
                 raise
             except APIStatusError as e:
-                if e.status_code == 529 and attempt < max_retries - 1:
+                status = getattr(e, 'status_code', None)
+                if status in (429, 529) and attempt < max_retries - 1:
                     wait = 30 * (attempt + 1)
                     self.logger.warning(
-                        f"jobhunter: Anthropic API overloaded (529), "
+                        f"jobhunter: API overloaded/rate-limited ({status}), "
                         f"retry {attempt + 1}/{max_retries} in {wait}s..."
                     )
                     time.sleep(wait)
                 else:
                     raise
+            except Exception as e:
+                if self.ai_provider == "openai" and attempt < max_retries - 1:
+                    status = getattr(e, 'status_code', None)
+                    if status in (429, 529):
+                        wait = 30 * (attempt + 1)
+                        self.logger.warning(
+                            f"jobhunter: OpenAI API rate-limited ({status}), "
+                            f"retry {attempt + 1}/{max_retries} in {wait}s..."
+                        )
+                        time.sleep(wait)
+                        continue
+                raise
+
+    def _openai_create(self, client, **kwargs):
+        """Convert Anthropic-style kwargs to OpenAI format and call API."""
+        messages = list(kwargs.get("messages", []))
+        if "system" in kwargs:
+            messages.insert(0, {"role": "system", "content": kwargs["system"]})
+        return client.chat.completions.create(
+            model=kwargs.get("model", self.ai_model),
+            messages=messages,
+            max_tokens=kwargs.get("max_tokens", self.ai_max_tokens),
+            temperature=kwargs.get("temperature", self.ai_temperature),
+        )
+
+    def _extract_text(self, response) -> str:
+        """Extract text from LLM response."""
+        if self.ai_provider == "openai":
+            return response.choices[0].message.content
+        return response.content[0].text
+
+    def _extract_input_tokens(self, response) -> int:
+        """Extract input token count from LLM response."""
+        if self.ai_provider == "openai":
+            return getattr(response.usage, 'prompt_tokens', 0)
+        return response.usage.input_tokens
+
+    def _extract_output_tokens(self, response) -> int:
+        """Extract output token count from LLM response."""
+        if self.ai_provider == "openai":
+            return getattr(response.usage, 'completion_tokens', 0)
+        return response.usage.output_tokens
 
     def _analyze_job_with_cv(self, job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
@@ -4121,9 +4210,9 @@ Respond in JSON format:
     "recommendation": "APPLY|REVIEW|SKIP"
 }}"""
 
-            # Call Claude API
-            self.logger.debug(f"jobhunter: Calling Claude API for job {job.get('id', 'unknown')}...")
-            response = self._call_anthropic_with_retry(
+            # Call LLM API
+            self.logger.debug(f"jobhunter: Calling LLM API for job {job.get('id', 'unknown')}...")
+            response = self._call_llm_with_retry(
                 model=self.ai_model,
                 max_tokens=self.ai_max_tokens,
                 temperature=self.ai_temperature,
@@ -4132,7 +4221,7 @@ Respond in JSON format:
 
             # Parse response (handle markdown-wrapped JSON)
             self.logger.debug(f"jobhunter: Got response, extracting text...")
-            result_text = response.content[0].text
+            result_text = self._extract_text(response)
 
             # Log raw response for debugging
             self.logger.debug(f"jobhunter: Raw AI response (first 500 chars): {result_text[:500]}")
@@ -4178,8 +4267,8 @@ Respond in JSON format:
             result = json.loads(json_only)
 
             # Calculate cost
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
+            input_tokens = self._extract_input_tokens(response)
+            output_tokens = self._extract_output_tokens(response)
             cost = self._calculate_ai_cost(input_tokens, output_tokens)
 
             # Record usage for cost tracking
@@ -4445,21 +4534,21 @@ START YOUR MESSAGE WITH:
 
 Then provide your curated selections with detailed analysis."""
 
-            # Call Claude Sonnet for the summary
+            # Call LLM for the summary
             self.logger.debug(f"jobhunter: Generating hiring summary with {self.ai_summary_model} for {len(approved_jobs)} jobs...")
 
-            response = self._call_anthropic_with_retry(
+            response = self._call_llm_with_retry(
                 model=self.ai_summary_model,
                 max_tokens=self.ai_summary_max_tokens,
                 temperature=0.5,  # Slightly higher for more natural writing
                 messages=[{"role": "user", "content": prompt}]
             )
 
-            summary_text = response.content[0].text
+            summary_text = self._extract_text(response)
 
             # Calculate cost
-            input_tokens = response.usage.input_tokens
-            output_tokens = response.usage.output_tokens
+            input_tokens = self._extract_input_tokens(response)
+            output_tokens = self._extract_output_tokens(response)
             cost = self._calculate_ai_cost(input_tokens, output_tokens, model=self.ai_summary_model)
 
             # Record the summary generation cost
