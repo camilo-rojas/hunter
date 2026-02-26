@@ -122,6 +122,8 @@ class JobHunterService(BaseService):
         # Notification preferences
         self.send_individual_notifications = self.config.get('send_individual_notifications', False)
 
+        self._user_db = None  # Lazy-initialized (must be before _resolve_api_key)
+
         if self.ai_enabled:
             try:
                 self.secrets_manager = SecretsManager()
@@ -187,7 +189,6 @@ class JobHunterService(BaseService):
 
         # Per-user client cache (ADR-006)
         self._clients = {}  # user_id -> client (Anthropic or OpenAI)
-        self._user_db = None  # Lazy-initialized
 
         # Initialize database manager (will be initialized during start_service)
         self.db_manager: Optional[JobHunterDatabaseManager] = None
