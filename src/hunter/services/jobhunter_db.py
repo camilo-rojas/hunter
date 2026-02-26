@@ -504,17 +504,20 @@ class JobHunterDatabaseManager:
             return True
 
     def get_job_by_id(self, job_id: int) -> Optional[Dict[str, Any]]:
-        """Get a job posting by ID."""
+        """Get a job posting by ID, including company name."""
         with self._get_connection() as conn:
             cursor = conn.execute("""
-                SELECT * FROM job_postings WHERE id = ?
+                SELECT j.*, c.name as company_name
+                FROM job_postings j
+                LEFT JOIN companies c ON j.company_id = c.id
+                WHERE j.id = ?
             """, (job_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     def get_recent_jobs(self, company_id: int = None, limit: int = 50) -> List[Dict[str, Any]]:
         """
-        Get recent job postings.
+        Get recent job postings, including company name.
 
         Args:
             company_id: Filter by company (optional)
@@ -526,15 +529,19 @@ class JobHunterDatabaseManager:
         with self._get_connection() as conn:
             if company_id:
                 cursor = conn.execute("""
-                    SELECT * FROM job_postings
-                    WHERE company_id = ?
-                    ORDER BY scraped_date DESC
+                    SELECT j.*, c.name as company_name
+                    FROM job_postings j
+                    LEFT JOIN companies c ON j.company_id = c.id
+                    WHERE j.company_id = ?
+                    ORDER BY j.scraped_date DESC
                     LIMIT ?
                 """, (company_id, limit))
             else:
                 cursor = conn.execute("""
-                    SELECT * FROM job_postings
-                    ORDER BY scraped_date DESC
+                    SELECT j.*, c.name as company_name
+                    FROM job_postings j
+                    LEFT JOIN companies c ON j.company_id = c.id
+                    ORDER BY j.scraped_date DESC
                     LIMIT ?
                 """, (limit,))
 

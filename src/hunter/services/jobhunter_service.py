@@ -4927,26 +4927,21 @@ Then provide your curated selections with detailed analysis."""
                 self.logger.info(f"jobhunter: No jobs scored >= {min_score} (notification threshold)")
                 return
 
-            # Limit to max notifications
-            if len(notify_jobs) > max_notifications:
+            # Sort by score descending, then limit to top N
+            sorted_jobs = sorted(notify_jobs, key=lambda x: x['score'], reverse=True)
+            if len(sorted_jobs) > max_notifications:
                 self.logger.info(f"jobhunter: Limiting notifications to top {max_notifications} jobs")
-                notify_jobs = notify_jobs[:max_notifications]
+                sorted_jobs = sorted_jobs[:max_notifications]
 
-            # Separate NEW jobs from existing jobs
-            new_jobs = [m for m in notify_jobs if m['job'].get('is_new', 0) == 1]
-            existing_jobs = [m for m in notify_jobs if m['job'].get('is_new', 0) == 0]
+            new_jobs = [m for m in sorted_jobs if m['job'].get('is_new', 0) == 1]
 
-            # Sort: NEW jobs first (by score), then existing jobs (by score)
-            sorted_jobs = sorted(new_jobs, key=lambda x: x['score'], reverse=True) + \
-                         sorted(existing_jobs, key=lambda x: x['score'], reverse=True)
-
-            self.logger.info(f"jobhunter: Sending notifications for {len(sorted_jobs)} jobs ({len(new_jobs)} new, {len(existing_jobs)} existing)")
+            self.logger.info(f"jobhunter: Sending notifications for {len(sorted_jobs)} jobs ({len(new_jobs)} new, {len(sorted_jobs) - len(new_jobs)} existing)")
 
             # Send header message
             if new_jobs:
                 header = f"🆕 *JobHunter Alert:* {len(new_jobs)} NEW job(s) found!"
             else:
-                header = f"📋 *JobHunter Alert:* {len(existing_jobs)} job(s) matched your criteria"
+                header = f"📋 *JobHunter Alert:* {len(sorted_jobs)} job(s) matched your criteria"
 
             self._send_response("broadcast", header, content_type="text/markdown")
 
