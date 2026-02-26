@@ -620,6 +620,8 @@ class JobHunterService(BaseService):
                 self._handle_deep_match(sender, args, correlation_id)
             elif command == "run-now":
                 self._handle_run_now(sender, correlation_id)
+            elif command == "top-10":
+                self._handle_top_jobs(sender, correlation_id)
             elif command == "add-schedule":
                 self._handle_add_schedule(sender, args, correlation_id)
             elif command == "list-schedules":
@@ -700,6 +702,7 @@ class JobHunterService(BaseService):
 
 **Workflow & Scheduling:**
 • **run-now** — Trigger full workflow: scrape → score → deep-match → AI analysis
+• **top-10** — Show top 10 AI-scored jobs from last run
 • **add-schedule** `<HH:MM> [timezone]` — Add daily run time
   Example: `@jobhunter add-schedule "09:00" "America/New_York"`
 • **list-schedules** — Show scheduled run times
@@ -940,6 +943,56 @@ class JobHunterService(BaseService):
                 f"Failed to get status: {str(e)}",
                 correlation_id=correlation_id
             )
+
+    def _handle_top_jobs(self, sender: str, correlation_id: str = None):
+        """Handle top-10 command — show top 10 AI-scored jobs."""
+        try:
+            if not self.db_manager:
+                self._send_error_response(sender, "Database not initialized.", correlation_id=correlation_id)
+                return
+
+            jobs = self.db_manager.get_ai_approved_jobs(min_score=0, limit=10)
+
+            if not jobs:
+                self._send_response(
+                    sender,
+                    "No AI-scored jobs found. Run `@jobhunter run-now` to scrape and analyze jobs.",
+                    correlation_id=correlation_id,
+                )
+                return
+
+            lines = [f"**Top {len(jobs)} AI-Scored Jobs**\n"]
+
+            for i, job in enumerate(jobs, 1):
+                title = job.get('title', 'Unknown')
+                company = job.get('company_name', 'Unknown Company')
+                location = job.get('location', 'N/A')
+                score = int(job.get('ai_score', 0))
+                recommendation = job.get('ai_recommendation', '—')
+                reasoning = job.get('ai_reasoning', '')
+                url = job.get('url', '')
+
+                # Truncate reasoning to ~2 sentences
+                summary = reasoning
+                if summary:
+                    sentences = summary.replace('. ', '.|').split('|')
+                    summary = '. '.join(s.strip() for s in sentences[:2])
+                    if not summary.endswith('.'):
+                        summary += '.'
+
+                lines.append(f"**{i}. {title}** — {company}")
+                lines.append(f"📍 {location} | 🏆 Score: {score} | 💡 {recommendation}")
+                if summary:
+                    lines.append(f"📝 {summary}")
+                if url:
+                    lines.append(f"🔗 [Apply]({url})")
+                lines.append("---")
+
+            self._send_response(sender, '\n'.join(lines), correlation_id=correlation_id, content_type="text/markdown")
+
+        except Exception as e:
+            self.logger.error(f"jobhunter: Error in top-10: {e}")
+            self._send_error_response(sender, f"Failed to get top jobs: {e}", correlation_id=correlation_id)
 
     # ============================================================================
     # Response Helpers
