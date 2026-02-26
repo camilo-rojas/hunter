@@ -45,11 +45,18 @@ from bs4 import BeautifulSoup
 from pathlib import Path
 
 from anthropic import Anthropic, APIStatusError, BadRequestError, NotFoundError
+from anthropic import APITimeoutError as AnthropicTimeoutError
 
 try:
     from openai import OpenAI
+    from openai import APITimeoutError as OpenAITimeoutError
 except ImportError:
     OpenAI = None
+    OpenAITimeoutError = None
+
+_TIMEOUT_ERRORS = tuple(
+    e for e in [AnthropicTimeoutError, OpenAITimeoutError] if e is not None
+)
 
 from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
@@ -99,6 +106,7 @@ class JobHunterService(BaseService):
         self.ai_enabled = ai_config.get('enabled', False)
         self.ai_provider = ai_config.get('provider', 'anthropic')
         self.ai_base_url = ai_config.get('base_url', None)
+        self.ai_timeout = ai_config.get('api_timeout', 120)
         self.ai_model = ai_config.get('model', 'claude-haiku-4-5-20251001')
         self.ai_summary_model = ai_config.get('summary_model', 'claude-sonnet-4-20250514')  # Sonnet for final summary
         self.ai_max_tokens = ai_config.get('max_tokens', 1000)
@@ -131,7 +139,7 @@ class JobHunterService(BaseService):
                 if self.ai_provider == 'openai':
                     api_key = self._resolve_api_key("openai_api_key", "OPENAI_API_KEY")
                     if api_key and OpenAI is not None:
-                        self._openai_client = OpenAI(api_key=api_key, base_url=self.ai_base_url)
+                        self._openai_client = OpenAI(api_key=api_key, base_url=self.ai_base_url, timeout=float(self.ai_timeout))
                         self.logger.info(
                             f"jobhunter: AI analysis enabled (openai provider at {self.ai_base_url}), "
                             f"model {self.ai_model}, min score: {self.ai_min_score}"
@@ -144,7 +152,7 @@ class JobHunterService(BaseService):
                 else:
                     api_key = self._resolve_api_key("anthropic_api_key", "ANTHROPIC_API_KEY")
                     if api_key:
-                        self.anthropic_client = Anthropic(api_key=api_key)
+                        self.anthropic_client = Anthropic(api_key=api_key, timeout=float(self.ai_timeout))
                         self.logger.info(
                             f"jobhunter: AI analysis enabled (anthropic provider), "
                             f"model {self.ai_model}, min score: {self.ai_min_score}"
@@ -4034,15 +4042,15 @@ class JobHunterService(BaseService):
             )
             if api_key:
                 if self.ai_provider == "openai":
-                    self._clients[user_id] = OpenAI(api_key=api_key, base_url=self.ai_base_url)
+                    self._clients[user_id] = OpenAI(api_key=api_key, base_url=self.ai_base_url, timeout=float(self.ai_timeout))
                 else:
-                    self._clients[user_id] = Anthropic(api_key=api_key)
+                    self._clients[user_id] = Anthropic(api_key=api_key, timeout=float(self.ai_timeout))
             else:
                 return default_client
         return self._clients.get(user_id, default_client)
 
     def _call_llm_with_retry(self, user_id: int = 0, **kwargs) -> Any:
-        """Call LLM API with retry on overloaded/rate-limit errors."""
+        """Call LLM API with retry on overloaded/rate-limit/timeout errors."""
         client = self._get_client(user_id)
         max_retries = 3
         for attempt in range(max_retries):
@@ -4068,6 +4076,17 @@ class JobHunterService(BaseService):
                 )
                 self.ai_enabled = False
                 raise
+            except _TIMEOUT_ERRORS as e:
+                if attempt < max_retries - 1:
+                    wait = 10 * (attempt + 1)
+                    self.logger.warning(
+                        f"jobhunter: API request timed out, "
+                        f"retry {attempt + 1}/{max_retries} in {wait}s..."
+                    )
+                    time.sleep(wait)
+                else:
+                    self.logger.warning("jobhunter: API request timed out after all retries")
+                    raise
             except APIStatusError as e:
                 status = getattr(e, 'status_code', None)
                 if status in (429, 529) and attempt < max_retries - 1:
@@ -4314,6 +4333,12 @@ Respond in JSON format:
                 )
             else:
                 self.logger.error(f"jobhunter: AI analysis failed: {e}")
+            return None
+        except _TIMEOUT_ERRORS:
+            self.logger.warning(
+                f"jobhunter: AI analysis timed out for job {job.get('id', '?')} — "
+                "LLM gateway not responding, skipping this job"
+            )
             return None
         except Exception as e:
             self.logger.error(f"jobhunter: AI analysis failed: {type(e).__name__}: {e}")

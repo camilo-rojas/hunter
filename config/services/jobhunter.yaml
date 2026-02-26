@@ -156,6 +156,7 @@ config:
     enabled: true                        # Enable AI-powered job analysis
     provider: "openai"                   # "anthropic" or "openai" (OpenAI-compatible proxy)
     base_url: "http://192.168.8.17:8000/v1"  # Only used with openai provider
+    api_timeout: 120                     # LLM request timeout in seconds (default: 120)
     model: "claude-haiku-4-5-20251001"   # Fast, cost-effective model for individual job analysis
     summary_model: "claude-sonnet-4-20250514"  # Higher quality model for final hiring summary
     max_tokens: 1000                     # Response token limit for individual analysis
