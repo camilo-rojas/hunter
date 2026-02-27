@@ -1141,6 +1141,17 @@ class JobHunterDatabaseManager:
                     datetime.now(timezone.utc).isoformat()
                 ))
 
+    def clear_ai_scores(self, job_ids: List[int]):
+        """Clear AI analysis for jobs that no longer meet criteria thresholds."""
+        if not job_ids:
+            return
+        with self._get_connection() as conn:
+            placeholders = ','.join('?' * len(job_ids))
+            conn.execute(
+                f"DELETE FROM job_matches WHERE job_id IN ({placeholders})",
+                job_ids
+            )
+
     def record_ai_analysis(
         self,
         job_id: int,

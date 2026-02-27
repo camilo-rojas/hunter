@@ -945,13 +945,13 @@ class JobHunterService(BaseService):
             )
 
     def _handle_top_jobs(self, sender: str, correlation_id: str = None):
-        """Handle top-10 command — show top 10 AI-scored jobs."""
+        """Handle top-10 command — show top 10 AI-scored jobs, sorted by age-adjusted score."""
         try:
             if not self.db_manager:
                 self._send_error_response(sender, "Database not initialized.", correlation_id=correlation_id)
                 return
 
-            jobs = self.db_manager.get_ai_approved_jobs(min_score=0, limit=10)
+            jobs = self.db_manager.get_ai_approved_jobs(min_score=0, limit=30)
 
             if not jobs:
                 self._send_response(
@@ -961,13 +961,35 @@ class JobHunterService(BaseService):
                 )
                 return
 
-            lines = [f"**Top {len(jobs)} AI-Scored Jobs**\n"]
+            # Compute effective scores and sort by age-adjusted AI score
+            enriched = []
+            for job in jobs:
+                ai_score = int(job.get('ai_score', 0))
+                age_penalty = self._calculate_freshness_adjustment(job)
+                effective_ai = ai_score + age_penalty
+                criteria_score = self._filter_and_score_job(job)
+                enriched.append({
+                    **job,
+                    'effective_ai': effective_ai,
+                    'criteria_score': criteria_score,
+                    'age_penalty': age_penalty,
+                })
 
-            for i, job in enumerate(jobs, 1):
+            # Only show active jobs (effective > 0)
+            enriched = [j for j in enriched if j['effective_ai'] > 0]
+            enriched.sort(key=lambda x: x['effective_ai'], reverse=True)
+            top = enriched[:10]
+
+            lines = [f"**Top {len(top)} AI-Scored Jobs** (age-adjusted)\n"]
+
+            for i, job in enumerate(top, 1):
                 title = job.get('title', 'Unknown')
                 company = job.get('company_name', 'Unknown Company')
                 location = job.get('location', 'N/A')
-                score = int(job.get('ai_score', 0))
+                ai_score = int(job.get('ai_score', 0))
+                eff = job['effective_ai']
+                criteria = job['criteria_score']
+                penalty = job['age_penalty']
                 recommendation = job.get('ai_recommendation', '—')
                 reasoning = job.get('ai_reasoning', '')
                 url = job.get('url', '')
@@ -980,8 +1002,9 @@ class JobHunterService(BaseService):
                     if not summary.endswith('.'):
                         summary += '.'
 
+                penalty_str = f"+{penalty}" if penalty >= 0 else str(penalty)
                 lines.append(f"**{i}. {title}** — {company}")
-                lines.append(f"📍 {location} | 🏆 Score: {score} | 💡 {recommendation}")
+                lines.append(f"📍 {location} | 🏆 AI: {ai_score} (eff: {eff}, age: {penalty_str}) | 📊 Criteria: {criteria} | 💡 {recommendation}")
                 if summary:
                     lines.append(f"📝 {summary}")
                 if url:
@@ -4009,16 +4032,11 @@ class JobHunterService(BaseService):
 
     def _calculate_freshness_adjustment(self, job: Dict[str, Any]) -> int:
         """
-        Calculate freshness bonus or penalty for a job (Phase 8).
+        Calculate freshness bonus or age penalty for a job.
 
-        Bonus for fresh jobs:
         - Brand new (is_new=True): +15 points
-        - 1-3 days old: +10 points
-        - 4-7 days old: +5 points
-
-        Penalty for stale jobs:
-        - 14-30 days old: -5 points
-        - >30 days old: -10 points
+        - First week (0-6 days): +10 points
+        - After that: -10 points per week old
 
         Args:
             job: Job dictionary with freshness fields
@@ -4026,37 +4044,25 @@ class JobHunterService(BaseService):
         Returns:
             Adjustment to score (positive for fresh, negative for stale)
         """
-        # Check if this is a brand new job
         if job.get('is_new', 0):
             return 15  # Maximum bonus for brand new postings
 
-        # Calculate age in days
         from datetime import datetime
         first_seen_str = job.get('first_seen_date')
         if not first_seen_str:
-            return 0  # No freshness data, no adjustment
+            return 0
 
         try:
             first_seen = datetime.fromisoformat(first_seen_str.replace('Z', '+00:00'))
             now = datetime.now(first_seen.tzinfo) if first_seen.tzinfo else datetime.now()
             age_days = (now - first_seen).days
+            weeks_old = age_days // 7
 
-            # Bonus for fresh jobs
-            if age_days <= 3:
-                return 10
-            elif age_days <= 7:
-                return 5
-            # No adjustment for normal age (8-13 days)
-            elif age_days <= 13:
-                return 0
-            # Penalty for stale jobs
-            elif age_days <= 30:
-                return -5
-            else:
-                return -10  # Heavy penalty for very old postings (likely filled)
-
+            if weeks_old == 0:
+                return 10  # Bonus for first week
+            return -(weeks_old * 10)  # -10 per week after that
         except (ValueError, AttributeError):
-            return 0  # Parse error, no adjustment
+            return 0
 
     # ============================================================================
     # AI Analysis Methods (Phase 11)
@@ -4922,6 +4928,50 @@ Then provide your curated selections with detailed analysis."""
 
             if self.verbose_logging:
                 self.logger.info(f"jobhunter:    ✅ {len(matched_jobs)} jobs scored >= {min_score}")
+
+            # Step 3b: Re-validate existing AI-scored jobs against current criteria
+            # Jobs with effective AI score > 0 stay active and get re-analyzed.
+            # Jobs with effective AI score <= 0 are frozen (kept for reference, skipped).
+            # Jobs that fail criteria threshold get their AI scores cleared.
+            existing_ai_jobs = self.db_manager.get_ai_approved_jobs(min_score=0, limit=500)
+            invalidated_ids = []
+            frozen_count = 0
+            for ai_job in existing_ai_jobs:
+                criteria_score = self._filter_and_score_job(ai_job)
+                if criteria_score < self.ai_prescreen_threshold:
+                    invalidated_ids.append(ai_job['id'])
+                    continue
+
+                # Check effective AI score (ai_score + age penalty)
+                ai_score = ai_job.get('ai_score', 0) or 0
+                age_penalty = self._calculate_freshness_adjustment(ai_job)
+                effective = ai_score + age_penalty
+                if effective <= 0:
+                    frozen_count += 1
+                    continue  # Frozen — keep in DB but don't re-analyze
+
+                # Active — add to pipeline if not already present
+                already_in = any(m['id'] == ai_job['id'] for m in matched_jobs)
+                if not already_in:
+                    matched_jobs.append({
+                        'job': ai_job,
+                        'score': criteria_score,
+                        'id': ai_job['id'],
+                        'url': ai_job['url'],
+                        'title': ai_job.get('title', 'Unknown')
+                    })
+
+            if invalidated_ids:
+                self.db_manager.clear_ai_scores(invalidated_ids)
+                self.logger.info(
+                    f"jobhunter: 🗑️ Cleared {len(invalidated_ids)} stale AI scores "
+                    f"(criteria score < {self.ai_prescreen_threshold})"
+                )
+            if frozen_count:
+                self.logger.info(f"jobhunter: 🧊 {frozen_count} jobs frozen (effective AI score <= 0)")
+
+            # Re-sort after adding existing AI jobs
+            matched_jobs.sort(key=lambda x: x['score'], reverse=True)
 
             # Step 4: Deep scrape top matches
             deep_scraped_jobs = []

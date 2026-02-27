@@ -2341,7 +2341,7 @@ class TestPhase8_FreshnessDetection:
         assert bonus == 10
 
     def test_freshness_bonus_4_to_7_days(self, service):
-        """Test freshness bonus for jobs 4-7 days old."""
+        """Test freshness bonus for jobs 4-7 days old (still in first week)."""
         from datetime import datetime, timedelta
 
         five_days_ago = datetime.now() - timedelta(days=5)
@@ -2354,11 +2354,11 @@ class TestPhase8_FreshnessDetection:
 
         bonus = service._calculate_freshness_adjustment(job)
 
-        # 4-7 days old gets +5
-        assert bonus == 5
+        # First week (0-6 days) gets +10
+        assert bonus == 10
 
-    def test_freshness_bonus_8_to_13_days(self, service):
-        """Test freshness bonus for jobs 8-13 days old."""
+    def test_freshness_penalty_second_week(self, service):
+        """Test freshness penalty for jobs 8-13 days old (second week)."""
         from datetime import datetime, timedelta
 
         ten_days_ago = datetime.now() - timedelta(days=10)
@@ -2371,11 +2371,11 @@ class TestPhase8_FreshnessDetection:
 
         bonus = service._calculate_freshness_adjustment(job)
 
-        # 8-13 days old gets 0 (neutral)
-        assert bonus == 0
+        # Week 1 (7-13 days) gets -10
+        assert bonus == -10
 
-    def test_freshness_bonus_14_to_30_days(self, service):
-        """Test freshness penalty for jobs 14-30 days old."""
+    def test_freshness_penalty_third_week(self, service):
+        """Test freshness penalty for jobs 14-20 days old (third week)."""
         from datetime import datetime, timedelta
 
         twenty_days_ago = datetime.now() - timedelta(days=20)
@@ -2388,10 +2388,10 @@ class TestPhase8_FreshnessDetection:
 
         bonus = service._calculate_freshness_adjustment(job)
 
-        # 14-30 days old gets -5 penalty
-        assert bonus == -5
+        # Week 2 (14-20 days) gets -20
+        assert bonus == -20
 
-    def test_freshness_bonus_over_30_days(self, service):
+    def test_freshness_penalty_over_30_days(self, service):
         """Test freshness penalty for jobs over 30 days old."""
         from datetime import datetime, timedelta
 
@@ -2405,8 +2405,8 @@ class TestPhase8_FreshnessDetection:
 
         bonus = service._calculate_freshness_adjustment(job)
 
-        # >30 days old gets -10 penalty
-        assert bonus == -10
+        # 40 days = 5 weeks → -50
+        assert bonus == -50
 
     def test_freshness_integrated_into_scoring(self, service, db_manager):
         """Test that freshness bonus is integrated into job scoring."""
