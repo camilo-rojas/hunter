@@ -58,6 +58,19 @@ _TIMEOUT_ERRORS = tuple(
     e for e in [AnthropicTimeoutError, OpenAITimeoutError] if e is not None
 )
 
+# Retry on rate limits / overload (429, 529) and transient upstream proxy
+# failures (500, 502, 503, 504). The Claude Code OpenAI-compat proxy returns
+# 500 "No response from Claude Code" when the backing session times out — treat
+# as transient.
+_RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504, 529})
+
+
+def _retry_wait(status: Optional[int], attempt: int) -> int:
+    """Backoff seconds: longer for rate limit (429/529), shorter for proxy 5xx."""
+    if status in (429, 529):
+        return 30 * (attempt + 1)
+    return 10 * (attempt + 1)
+
 from robotray.services.base import BaseService
 from robotray.services.jobhunter_db import JobHunterDatabaseManager
 from robotray.core.messaging import SecureMessage, MessagePriority
@@ -142,7 +155,7 @@ class JobHunterService(BaseService):
                 if self.ai_provider == 'openai':
                     api_key = self._resolve_api_key("openai_api_key", "OPENAI_API_KEY")
                     if api_key and OpenAI is not None:
-                        self._openai_client = OpenAI(api_key=api_key, base_url=self.ai_base_url, timeout=float(self.ai_timeout))
+                        self._openai_client = OpenAI(api_key=api_key, base_url=self.ai_base_url, timeout=float(self.ai_timeout), max_retries=0)
                         self.logger.info(
                             f"jobhunter: AI analysis enabled (openai provider at {self.ai_base_url}), "
                             f"model {self.ai_model}, min score: {self.ai_min_score}"
@@ -4113,7 +4126,7 @@ class JobHunterService(BaseService):
             )
             if api_key:
                 if self.ai_provider == "openai":
-                    self._clients[user_id] = OpenAI(api_key=api_key, base_url=self.ai_base_url, timeout=float(self.ai_timeout))
+                    self._clients[user_id] = OpenAI(api_key=api_key, base_url=self.ai_base_url, timeout=float(self.ai_timeout), max_retries=0)
                 else:
                     self._clients[user_id] = Anthropic(api_key=api_key, timeout=float(self.ai_timeout))
             else:
@@ -4160,26 +4173,25 @@ class JobHunterService(BaseService):
                     raise
             except APIStatusError as e:
                 status = getattr(e, 'status_code', None)
-                if status in (429, 529) and attempt < max_retries - 1:
-                    wait = 30 * (attempt + 1)
+                if status in _RETRYABLE_STATUS and attempt < max_retries - 1:
+                    wait = _retry_wait(status, attempt)
                     self.logger.warning(
-                        f"jobhunter: API overloaded/rate-limited ({status}), "
+                        f"jobhunter: API error {status} ({str(e)[:120]}), "
                         f"retry {attempt + 1}/{max_retries} in {wait}s..."
                     )
                     time.sleep(wait)
                 else:
                     raise
             except Exception as e:
-                if self.ai_provider == "openai" and attempt < max_retries - 1:
-                    status = getattr(e, 'status_code', None)
-                    if status in (429, 529):
-                        wait = 30 * (attempt + 1)
-                        self.logger.warning(
-                            f"jobhunter: OpenAI API rate-limited ({status}), "
-                            f"retry {attempt + 1}/{max_retries} in {wait}s..."
-                        )
-                        time.sleep(wait)
-                        continue
+                status = getattr(e, 'status_code', None)
+                if status in _RETRYABLE_STATUS and attempt < max_retries - 1:
+                    wait = _retry_wait(status, attempt)
+                    self.logger.warning(
+                        f"jobhunter: LLM proxy error {status} ({str(e)[:120]}), "
+                        f"retry {attempt + 1}/{max_retries} in {wait}s..."
+                    )
+                    time.sleep(wait)
+                    continue
                 raise
 
     def _openai_create(self, client, **kwargs):
