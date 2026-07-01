@@ -2816,12 +2816,44 @@ class TestAIAnalysis:
         
         # Run analysis
         result = service_with_ai._analyze_job_with_cv(job)
-        
+
         # Verify result
         assert result is not None
         assert result['ai_score'] == 95
         assert result['recommendation'] == 'APPLY'
         assert 'Python' in result['reasoning']
+
+    def test_ai_analysis_llm_500_handled_cleanly(self, service_with_ai, db_manager, caplog):
+        """A 5xx from the LLM gateway (after retries) is skipped without a traceback."""
+        import logging
+        from robotray.services.jobhunter_service import _API_STATUS_ERRORS
+
+        company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
+        job_id = db_manager.add_job_posting(
+            company_id=company_id, job_hash="hash-500", title="Engineer",
+            url="https://example.com/job", location="Remote", description="role")
+        job = db_manager.get_job_by_id(job_id)
+
+        # Build a status-error instance of the SDK's class without a real HTTP
+        # response, then have the retry wrapper surface it (retries exhausted).
+        err_cls = _API_STATUS_ERRORS[0]
+        exc = err_cls.__new__(err_cls)
+        Exception.__init__(exc, "Error code: 500 - No response from Claude Code")
+        exc.status_code = 500
+        service_with_ai._call_llm_with_retry = Mock(side_effect=exc)
+
+        with caplog.at_level(logging.WARNING):
+            result = service_with_ai._analyze_job_with_cv(job)
+
+        # Job is skipped, not crashed.
+        assert result is None
+        # Logged concisely as a warning, no traceback or ERROR-level noise.
+        assert any(
+            r.levelno == logging.WARNING and "LLM gateway error 500" in r.getMessage()
+            for r in caplog.records
+        )
+        assert not any("Traceback" in r.getMessage() for r in caplog.records)
+        assert not any(r.levelno >= logging.ERROR for r in caplog.records)
 
     def test_ai_analysis_json_parsing_with_markdown(self, service_with_ai, db_manager, monkeypatch):
         """Test JSON parsing when response includes markdown code blocks."""

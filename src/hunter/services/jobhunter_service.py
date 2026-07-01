@@ -50,12 +50,21 @@ from anthropic import APITimeoutError as AnthropicTimeoutError
 try:
     from openai import OpenAI
     from openai import APITimeoutError as OpenAITimeoutError
+    from openai import APIStatusError as OpenAIStatusError
 except ImportError:
     OpenAI = None
     OpenAITimeoutError = None
+    OpenAIStatusError = None
 
 _TIMEOUT_ERRORS = tuple(
     e for e in [AnthropicTimeoutError, OpenAITimeoutError] if e is not None
+)
+
+# HTTP-status errors from either SDK. The Anthropic and OpenAI clients each have
+# their own APIStatusError hierarchy, so a 500 from the OpenAI-compat proxy is
+# NOT an instance of anthropic.APIStatusError — both must be caught explicitly.
+_API_STATUS_ERRORS = tuple(
+    e for e in [APIStatusError, OpenAIStatusError] if e is not None
 )
 
 # Retry on rate limits / overload (429, 529) and transient upstream proxy
@@ -4171,23 +4180,15 @@ class JobHunterService(BaseService):
                 else:
                     self.logger.warning("jobhunter: API request timed out after all retries")
                     raise
-            except APIStatusError as e:
+            except _API_STATUS_ERRORS as e:
+                # Both Anthropic and OpenAI status errors land here (e.g. the
+                # proxy's 500 "No response from Claude Code"). Retry transient
+                # statuses; otherwise re-raise for the caller to handle.
                 status = getattr(e, 'status_code', None)
                 if status in _RETRYABLE_STATUS and attempt < max_retries - 1:
                     wait = _retry_wait(status, attempt)
                     self.logger.warning(
-                        f"jobhunter: API error {status} ({str(e)[:120]}), "
-                        f"retry {attempt + 1}/{max_retries} in {wait}s..."
-                    )
-                    time.sleep(wait)
-                else:
-                    raise
-            except Exception as e:
-                status = getattr(e, 'status_code', None)
-                if status in _RETRYABLE_STATUS and attempt < max_retries - 1:
-                    wait = _retry_wait(status, attempt)
-                    self.logger.warning(
-                        f"jobhunter: LLM proxy error {status} ({str(e)[:120]}), "
+                        f"jobhunter: LLM API error {status} ({str(e)[:120]}), "
                         f"retry {attempt + 1}/{max_retries} in {wait}s..."
                     )
                     time.sleep(wait)
@@ -4431,6 +4432,16 @@ Respond in JSON format:
             self.logger.warning(
                 f"jobhunter: AI analysis timed out for job {job.get('id', '?')} — "
                 "LLM gateway not responding, skipping this job"
+            )
+            return None
+        except _API_STATUS_ERRORS as e:
+            # Transient/server-side LLM gateway error (e.g. 500 "No response from
+            # Claude Code") that survived retries. Operational, not a bug — log
+            # concisely without a traceback and skip this job.
+            status = getattr(e, 'status_code', '?')
+            self.logger.warning(
+                f"jobhunter: LLM gateway error {status} analyzing job "
+                f"{job.get('id', '?')} after retries — skipping ({str(e)[:120]})"
             )
             return None
         except Exception as e:
@@ -4698,6 +4709,15 @@ Then provide your curated selections with detailed analysis."""
                 )
             else:
                 self.logger.error(f"jobhunter: Failed to generate hiring summary: {e}")
+            return None
+        except _API_STATUS_ERRORS as e:
+            # Transient/server-side LLM gateway error that survived retries.
+            # Operational, not a bug — log concisely without a traceback.
+            status = getattr(e, 'status_code', '?')
+            self.logger.warning(
+                f"jobhunter: LLM gateway error {status} generating hiring summary "
+                f"after retries — skipping ({str(e)[:120]})"
+            )
             return None
         except Exception as e:
             self.logger.error(f"jobhunter: Failed to generate hiring summary: {type(e).__name__}: {e}")
