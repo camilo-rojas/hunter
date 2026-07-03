@@ -132,8 +132,8 @@ class JobHunterService(BaseService):
         self.ai_provider = ai_config.get('provider', 'anthropic')
         self.ai_base_url = ai_config.get('base_url', None)
         self.ai_timeout = ai_config.get('api_timeout', 120)
-        self.ai_model = ai_config.get('model', 'claude-haiku-4-5-20251001')
-        self.ai_summary_model = ai_config.get('summary_model', 'claude-sonnet-4-20250514')  # Sonnet for final summary
+        self.ai_model = ai_config.get('model', 'default')
+        self.ai_summary_model = ai_config.get('summary_model', 'default')  # final hiring summary
         self.ai_max_tokens = ai_config.get('max_tokens', 1000)
         self.ai_summary_max_tokens = ai_config.get('summary_max_tokens', 2000)  # More tokens for summary
         self.ai_temperature = ai_config.get('temperature', 0.3)

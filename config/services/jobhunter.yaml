@@ -157,8 +157,8 @@ config:
     provider: "openai"                   # "anthropic" or "openai" (OpenAI-compatible proxy)
     base_url: "http://192.168.8.17:8000/v1"  # OpenAI-compatible LLM proxy
     api_timeout: 120                     # LLM request timeout in seconds (default: 120)
-    model: "claude-sonnet-4-6"           # cheapest available model (no haiku on this proxy)
-    summary_model: "claude-sonnet-4-6"   # final hiring summary
+    model: "default"                     # proxy 'default' model (OpenAI-owned)
+    summary_model: "default"             # final hiring summary
     max_tokens: 1000                     # Response token limit for individual analysis
     summary_max_tokens: 2000             # Token limit for final summary (needs more for detailed writeup)
     temperature: 0.3                     # Lower temp for consistent analysis
