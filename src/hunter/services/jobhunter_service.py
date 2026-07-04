@@ -2797,15 +2797,18 @@ class JobHunterService(BaseService):
                     raise
 
             except requests.exceptions.HTTPError as e:
+                if e.response is not None and e.response.status_code < 500:
+                    # Client errors (4xx) are permanent for this URL — one concise
+                    # WARNING (no retry counter, no traceback), then raise.
+                    self.logger.warning(
+                        f"jobhunter: {e.response.status_code} for {url} — source looks "
+                        f"dead/moved; consider deactivating the company")
+                    raise
                 self.logger.error(f"jobhunter: HTTP error fetching {url}: {e} (attempt {attempt + 1}/{max_retries})")
-                if e.response.status_code >= 500:  # Retry on server errors
-                    if attempt < max_retries - 1:
-                        sleep_time = 2 ** attempt
-                        time.sleep(sleep_time)
-                    else:
-                        raise
+                if attempt < max_retries - 1:   # retry server errors (5xx)
+                    sleep_time = 2 ** attempt
+                    time.sleep(sleep_time)
                 else:
-                    # Client errors (4xx) - don't retry
                     raise
 
             except requests.exceptions.RequestException as e:
@@ -3617,10 +3620,15 @@ class JobHunterService(BaseService):
         except requests.exceptions.Timeout:
             self.logger.warning(f"jobhunter: Greenhouse API timed out ({self.request_timeout}s) — skipping")
             return []
+        except requests.exceptions.HTTPError as e:
+            # Permanent source problem (dead board etc.) — already logged concisely
+            # by _fetch_with_retry; no traceback (tracebacks are for real bugs).
+            self.logger.warning(f"jobhunter: Greenhouse source unavailable: {e}")
+            return []
         except Exception as e:
             self.logger.error(f"jobhunter: Error in Greenhouse parser: {e}")
             import traceback
-            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            self.logger.error(f"jobhunter: Traceback: {traceback.format_exc()}")
             return []
 
     def _scrape_ashby(self, careers_url: str) -> List[Dict[str, Any]]:
