@@ -263,6 +263,7 @@ class TestJobHunterServiceLifecycle:
         """Service configuration for testing."""
         return {
             'database_path': temp_db,
+            'owner_user_id': 6,
             'default_criteria': [
                 {"type": "keyword", "value": "python", "weight": 10},
                 {"type": "location", "value": "Remote", "weight": 20},
@@ -365,6 +366,7 @@ class TestJobHunterMessageHandling:
         metadata = MessageMetadata(
             sender_service="test-service",
             target_service="jobhunter",
+            user_id=service.owner_user_id,
             priority=MessagePriority.NORMAL,
             correlation_id="test-123"
         )
@@ -400,7 +402,8 @@ class TestJobHunterMessageHandling:
         # Create add-company command (no quotes needed - use underscores for multi-word names)
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": 'add-company TestCorp https://example.com/careers'},
@@ -430,7 +433,8 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": "list-companies"},
@@ -454,7 +458,8 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": "list-companies"},
@@ -482,7 +487,8 @@ class TestJobHunterMessageHandling:
         # Remove it
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": f"remove-company {company_id}"},
@@ -506,7 +512,8 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": "status"},
@@ -530,7 +537,8 @@ class TestJobHunterMessageHandling:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": "invalid-command"},
@@ -552,7 +560,8 @@ class TestJobHunterMessageHandling:
         # Missing arguments
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": "add-company"},
@@ -565,6 +574,40 @@ class TestJobHunterMessageHandling:
         response = service.message_queues.outbound_queue.get_nowait()
         assert "❌ Error" in response.payload["content"]
         assert "Usage:" in response.payload["content"]
+
+    # -------------------------------------------------- ADR-009 F3 owner gate
+    def _send(self, service, content, user_id):
+        from robotray.core.messaging import SecureMessage, MessageMetadata
+        import time
+        service.message_queues.inbound_queue.put_nowait(SecureMessage(
+            payload={"content": content},
+            metadata=MessageMetadata(
+                sender_service="test-service", target_service="jobhunter",
+                correlation_id="c-1", user_id=user_id)))
+        time.sleep(0.4)
+        return service.message_queues.outbound_queue.get_nowait().payload["content"]
+
+    def test_command_without_identity_refused(self, service):
+        """A data command from an unauthenticated channel is refused."""
+        out = self._send(service, "list-companies", user_id=None)
+        assert "identity" in out.lower()
+
+    def test_command_from_non_owner_refused(self, service):
+        """A different authenticated user cannot touch the owner's workspace."""
+        out = self._send(service, "list-companies",
+                         user_id=service.owner_user_id + 1)
+        assert "belongs to another user" in out
+
+    def test_owner_command_allowed(self, service):
+        """The configured owner passes the gate."""
+        out = self._send(service, "list-companies", user_id=service.owner_user_id)
+        assert "belongs to another user" not in out
+        assert "identity" not in out.lower()
+
+    def test_help_open_without_identity(self, service):
+        """help needs no identity — it exposes nothing personal."""
+        out = self._send(service, "help", user_id=None)
+        assert "JobHunter Service" in out
 
 
 class TestJobHunterCriteriaManagement:
@@ -600,7 +643,8 @@ class TestJobHunterCriteriaManagement:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": command},
@@ -935,7 +979,8 @@ class TestJobHunterRangeSupport:
 
         metadata = MessageMetadata(
             sender_service="test-service",
-            target_service="jobhunter"
+            target_service="jobhunter",
+            user_id=service.owner_user_id,
         )
         message = SecureMessage(
             payload={"content": command},
@@ -1148,7 +1193,7 @@ class TestPhase5_5DeepScraping:
                 sender_service='test-channel',
                 target_service='jobhunter',
                 correlation_id='test-123',
-                user_id=1,
+                user_id=service.owner_user_id,
                 username='test-user',
                 user_roles=['admin'],
                 priority=MessagePriority.NORMAL
@@ -1545,7 +1590,7 @@ class TestPhase6_Scheduler:
                 sender_service='test-channel',
                 target_service='jobhunter',
                 correlation_id='test-123',
-                user_id=1,
+                user_id=service.owner_user_id,
                 username='test-user',
                 user_roles=['admin'],
                 priority=MessagePriority.NORMAL
@@ -2112,7 +2157,7 @@ class TestPhase7_ScheduleManagement:
                 sender_service='test-channel',
                 target_service='jobhunter',
                 correlation_id='test-123',
-                user_id=1,
+                user_id=service.owner_user_id,
                 username='test-user',
                 user_roles=['admin'],
                 priority=MessagePriority.NORMAL
@@ -2472,6 +2517,8 @@ class TestPhase9_Notifications:
 
         service._send_response = Mock()
         service._send_error_response = Mock()
+        # ADR-009 F3: scheduled matches deliver privately via notify_user
+        service.notify_user = Mock()
 
         yield service
 
@@ -2518,8 +2565,10 @@ class TestPhase9_Notifications:
         # Send notifications
         service._send_job_notifications(matched_jobs)
 
-        # Verify notifications were sent
-        assert service._send_response.called, "Notifications should have been sent"
+        # Verify notifications were sent privately to the owner (ADR-009 F3)
+        assert service.notify_user.called, "Notifications should have been sent"
+        assert all(c.args[0] == service.owner_user_id
+                   for c in service.notify_user.call_args_list)
 
         # Verify NEW job was marked as seen after notification
         new_job = db_manager.get_job_by_id(new_job_id)
@@ -2555,9 +2604,9 @@ class TestPhase9_Notifications:
         # Send notifications
         service._send_job_notifications(matched_jobs)
 
-        # Count send_response calls (header + individual notifications)
+        # Count notify_user calls (header + individual notifications)
         # Should be: 1 header + max 10 job notifications
-        call_count = service._send_response.call_count
+        call_count = service.notify_user.call_count
         assert call_count <= 11  # 1 header + 10 jobs max
 
     def test_notification_markdown_formatting(self, service, db_manager):
@@ -2585,8 +2634,8 @@ class TestPhase9_Notifications:
         # Send notification
         service._send_job_notification(match, index=1, total=1)
 
-        # Check that content_type is markdown
-        calls = service._send_response.call_args_list
+        # Check that content_type is markdown (private owner delivery)
+        calls = service.notify_user.call_args_list
         assert len(calls) > 0
 
         # Verify content_type parameter
@@ -2600,7 +2649,7 @@ class TestPhase9_Notifications:
         service._send_job_notifications([])
 
         # Should not send any messages
-        assert not service._send_response.called
+        assert not service.notify_user.called
 
     def test_notification_below_threshold(self, service, db_manager):
         """Test that jobs below min_match_score are not notified."""
@@ -2629,7 +2678,7 @@ class TestPhase9_Notifications:
         service._send_job_notifications(matched_jobs)
 
         # Should not send any notifications (no matches above threshold)
-        assert not service._send_response.called or service._send_response.call_count == 0
+        assert not service.notify_user.called or service.notify_user.call_count == 0
 
 
 # =============================================================================
@@ -3525,6 +3574,7 @@ class TestRunHistoryCommands:
         metadata = MessageMetadata(
             sender_service="test-service",
             target_service="jobhunter",
+            user_id=service.owner_user_id,
             priority=MessagePriority.NORMAL,
             correlation_id="test-hist"
         )

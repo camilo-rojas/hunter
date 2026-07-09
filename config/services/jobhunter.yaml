@@ -68,6 +68,12 @@ config:
   # Database configuration
   database_path: "data/jobhunter.db"
 
+  # ADR-009 F3: jobhunter is a fully-personal workspace. Every data command
+  # is identity-gated to this owner, and scheduled job matches deliver
+  # privately (notify_user), never @broadcast. Per-user workspaces (user_id
+  # on every table) are deferred until a second job-hunting user exists.
+  owner_user_id: 6   # camilo
+
   # Scheduled run times (loaded on first start, then managed via commands)
   # After first start, use: @jobhunter add-schedule "21:00"
   default_schedules:

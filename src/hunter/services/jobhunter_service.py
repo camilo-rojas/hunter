@@ -109,6 +109,14 @@ class JobHunterService(BaseService):
 
         # Get configuration
         db_path = self.config.get('database_path', 'data/jobhunter.db')
+
+        # ADR-009 F3: jobhunter is a fully-personal service — the whole
+        # workspace (companies, criteria, schedules, jobs, matches) belongs
+        # to one owner. Until per-user workspaces exist, every data command
+        # is identity-gated to this owner and scheduled results deliver
+        # privately (notify_user), never @broadcast.
+        self.owner_user_id = int(self.config.get('owner_user_id', 1))
+
         self.default_criteria = self.config.get('default_criteria', [])
         self.default_criterion_groups = self.config.get('default_criterion_groups', [])
         self.default_schedules = self.config.get('default_schedules', [])
@@ -610,6 +618,12 @@ class JobHunterService(BaseService):
             self.logger.info(f"jobhunter: 📨 Processing '{command}' from {sender}{correlation_info}")
             self.logger.debug(f"jobhunter: Command '{command}' has {len(args)} argument(s)")
 
+            # ADR-009 F3: every command except help touches the owner's
+            # personal workspace — enforce the owner gate (ADR-003: channels
+            # assert identity, services enforce it). help stays open.
+            if command != "help" and not self._authorize_owner(sender, correlation_id, message):
+                return
+
             # Route to appropriate handler
             if command == "help":
                 self._handle_help(sender, correlation_id)
@@ -1076,6 +1090,45 @@ class JobHunterService(BaseService):
         """Send an error response message."""
         content = f"❌ Error: {error_message}"
         self._send_response(recipient, content, correlation_id=correlation_id)
+
+    def _authorize_owner(self, sender: str, correlation_id: Optional[str],
+                         message) -> bool:
+        """Owner gate for the personal job-hunt workspace (ADR-009 F3).
+
+        Returns True only when the caller's asserted identity is this
+        service's configured owner. A missing identity or a non-owner is
+        refused (the non-owner gets the same 'not your workspace' message —
+        no existence oracle about whose it is). Reply routing is unchanged:
+        the refusal goes back to the requesting channel.
+        """
+        try:
+            user_id = int(message.metadata.user_id) \
+                if message.metadata.user_id is not None else None
+        except (TypeError, ValueError):
+            user_id = None
+
+        if user_id is None:
+            self._send_error_response(
+                sender,
+                "JobHunter is a personal workspace and your channel didn't "
+                "attach an identity. Use an authenticated channel (web login, "
+                "or a /link-verified telegram chat).",
+                correlation_id=correlation_id,
+            )
+            return False
+
+        if user_id != self.owner_user_id:
+            self.logger.warning(
+                f"jobhunter: refused command from non-owner user {user_id} "
+                f"(owner is {self.owner_user_id})")
+            self._send_error_response(
+                sender,
+                "This JobHunter workspace belongs to another user.",
+                correlation_id=correlation_id,
+            )
+            return False
+
+        return True
 
     # ============================================================================
     # Unified Criteria Handlers (Phase 3 - Refactored)
@@ -5104,9 +5157,10 @@ Then provide your curated selections with detailed analysis."""
                 summary = self._generate_hiring_summary(ai_approved_jobs)
 
                 if summary:
-                    # Send one curated message with the summary
-                    self._send_response(
-                        "broadcast",
+                    # Private owner delivery (ADR-009 F3) — job matches are
+                    # personal; never @broadcast to every session/chat
+                    self.notify_user(
+                        self.owner_user_id,
                         f"**🎯 JobHunter: Today's Top Opportunities**\n\n{summary}",
                         content_type="text/markdown"
                     )
@@ -5114,8 +5168,8 @@ Then provide your curated selections with detailed analysis."""
                 else:
                     # Summary generation failed - log error but don't spam with individual notifications
                     self.logger.error("jobhunter: Summary generation failed - no notifications sent")
-                    self._send_response(
-                        "broadcast",
+                    self.notify_user(
+                        self.owner_user_id,
                         f"⚠️ **JobHunter**: Found {len(ai_approved_jobs)} approved jobs but failed to generate summary. Check logs for details.",
                         content_type="text/markdown"
                     )
@@ -5224,7 +5278,8 @@ Then provide your curated selections with detailed analysis."""
             else:
                 header = f"📋 *JobHunter Alert:* {len(sorted_jobs)} job(s) matched your criteria"
 
-            self._send_response("broadcast", header, content_type="text/markdown")
+            # Private owner delivery (ADR-009 F3), not @broadcast
+            self.notify_user(self.owner_user_id, header, content_type="text/markdown")
 
             # Send individual job notifications
             for i, match in enumerate(sorted_jobs, 1):
@@ -5298,8 +5353,8 @@ Then provide your curated selections with detailed analysis."""
             # URL (Telegram auto-linkifies URLs, no markdown needed)
             message += f"\n\n🔗 *Apply:* {job['url']}"
 
-            # Send to broadcast (Telegram + all channels) with markdown content type
-            self._send_response("broadcast", message, content_type="text/markdown")
+            # Private owner delivery (ADR-009 F3), not @broadcast
+            self.notify_user(self.owner_user_id, message, content_type="text/markdown")
 
             if self.verbose_logging:
                 self.logger.info(f"jobhunter: Sent notification for: {job['title']}")
