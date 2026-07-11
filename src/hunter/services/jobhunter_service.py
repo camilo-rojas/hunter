@@ -4643,6 +4643,7 @@ Respond in JSON format:
                         freshness_note = ""
 
                 job_info = {
+                    'id': job.get('id'),
                     'title': job.get('title', 'Unknown'),
                     'company': job.get('company_name', 'Unknown'),
                     'location': job.get('location', 'Not specified'),
@@ -4661,6 +4662,7 @@ Respond in JSON format:
             # Build the prompt for Sonnet
             jobs_text = "\n\n".join([
                 f"**Job {i+1}:**\n"
+                f"- ID: {j['id']}\n"
                 f"- Title: {j['title']}\n"
                 f"- Company: {j['company']}\n"
                 f"- Location: {j['location']}\n"
@@ -4693,7 +4695,7 @@ Respond in JSON format:
 YOUR CLIENT'S SEARCH GOAL (in their own words):
 {self._goal_content}
 """
-                prompt = f"""You are a professional hiring assistant helping your client find their next career opportunity.
+                prompt = f"""You are a professional hiring assistant. From these {len(approved_jobs)} pre-screened positions, pick the TOP 1-3 (max 5 only if all are exceptional) and write an ULTRA-COMPACT briefing. Your client is busy and wants a scannable digest — they'll ask for the full breakdown on any role they care about.
 
 YOUR CLIENT'S PROFILE:
 {self._cv_content if self._cv_content else "[CV not provided]"}
@@ -4704,27 +4706,18 @@ THEIR JOB SEARCH CRITERIA:
 CANDIDATE POSITIONS (already pre-screened):
 {jobs_text}
 
-YOUR TASK:
-Review these {len(approved_jobs)} pre-approved positions and select the TOP 1-3 opportunities (maximum 5 only if they're all truly excellent). Write a professional, concise message to your client as their hiring assistant.
+OUTPUT FORMAT — STRICT. Per picked position output EXACTLY two lines:
+1. Header: 🎯 *[Title](URL)* — Company · <score>/100 · <freshness: 🔥 new | recent | sent Nd ago> · id <ID>
+2. ONE paragraph (≤45 words, no line breaks, no lists): why it fits the client's role/comp/location/skill goals, the single biggest concern, and a one-word verdict (Apply / Consider / Stretch).
+Separate positions with a blank line.
 
-IMPORTANT GUIDELINES:
-- Be selective: Pick only the BEST 1-3 positions (up to 5 if all are exceptional)
-- Write in a professional but warm tone (you're their trusted advisor)
-- For each selected position, explain:
-  * Why it's a strong fit against their criteria and experience
-  * **NOTIFICATION CONTEXT:** If previously sent, mention it (e.g., "I sent this yesterday - still worth considering because..."). If NEW/FRESH, emphasize time-sensitivity!
-  * Any urgency factors (🔥 brand new postings are TIME-SENSITIVE - act fast!)
-  * Potential concerns or gaps they should be aware of
-  * Include the direct application link
-- Be honest about concerns - they want your real assessment
-- Format with clear headers and bullet points
-- Include position links inline like: [Position Title](URL)
-- **CRITICAL:** Use the "Notification History" and "Freshness" fields to provide context about whether this is a reminder or a new opportunity
+HARD RULES:
+- NO ## or ### headers, NO bullet lists, NO sub-sections, NO action items, NO closing pep talk.
+- One header line + one paragraph per job. Nothing else.
+- Start with a single line: "Today's top <N>:".
+- End with a single line: "_Full detail on any role: @jobhunter analyze-job <id>_".
 
-START YOUR MESSAGE WITH:
-"Hi! I've reviewed today's opportunities and here are my top recommendations for you:"
-
-Then provide your curated selections with detailed analysis."""
+Be selective and honest — it's fine to pick just one, or to say none clear the bar."""
 
             # Call LLM for the summary
             self.logger.debug(f"jobhunter: Generating hiring summary with {self.ai_summary_model} for {len(approved_jobs)} jobs...")

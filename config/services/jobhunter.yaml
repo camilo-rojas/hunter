@@ -166,7 +166,7 @@ config:
     model: "default"                     # proxy 'default' model (OpenAI-owned)
     summary_model: "default"             # final hiring summary
     max_tokens: 1000                     # Response token limit for individual analysis
-    summary_max_tokens: 2000             # Token limit for final summary (needs more for detailed writeup)
+    summary_max_tokens: 900              # Compact digest: 1 header line + 1 paragraph per job (was 2000)
     temperature: 0.3                     # Lower temp for consistent analysis
     prescreen_threshold: 70              # Only run AI on jobs with criteria score >= 70 (saves cost on poor matches)
     min_score_threshold: 60              # Only notify jobs with AI score >= 60 (lowered for testing)
@@ -222,8 +222,14 @@ config:
 
     # Customizable hiring summary prompt template (uses Claude Sonnet for final curation)
     # Variables: {cv_content}, {goal_content}, {criteria_summary}, {jobs_text}, {job_count}
+    # Ultra-compact digest: one title header line + one paragraph per job.
+    # The client wants a scannable list and asks for full detail on demand
+    # (@jobhunter analyze-job <id>).
     summary_prompt_template: |
-      You are a professional hiring assistant. Review these {job_count} pre-screened positions and select the TOP 1-3 opportunities (max 5 if all exceptional).
+      You are a professional hiring assistant. From these {job_count} pre-screened
+      positions, pick the TOP 1-3 (max 5 only if all are exceptional) and write an
+      ULTRA-COMPACT briefing. Your client is busy and wants a scannable digest —
+      they will ask for the full breakdown on any role they care about.
 
       CLIENT PROFILE:
       {cv_content}
@@ -237,37 +243,21 @@ config:
       CANDIDATES:
       {jobs_text}
 
-      FORMATTING RULES (CRITICAL):
-      - NO ## or ### headers - use **bold text** only
-      - Be extremely concise - target 1/3 normal length
-      - Each position should be ~15-20 lines total (not 40+)
-      - Use tight paragraphs, not long bullet lists
-      - Include links: [Position Title](URL)
-      - Note if 🔥 NEW/FRESH (time-sensitive) or if previously sent
+      OUTPUT FORMAT — STRICT. Per picked position output EXACTLY two lines:
+      1. Header: 🎯 *[Title](URL)* — Company · <score>/100 · <freshness: 🔥 new | recent | sent Nd ago> · id <ID>
+      2. ONE paragraph (≤45 words, no line breaks, no lists): why it fits the
+         client's role/comp/location/skill goals, the single biggest concern, and a
+         one-word verdict (Apply / Consider / Stretch).
+      Separate positions with a blank line.
 
-      STRUCTURE FOR EACH POSITION:
+      HARD RULES:
+      - NO ## or ### headers, NO bullet lists, NO sub-sections ("Great match
+        because", "Considerations", etc.), NO action items, NO closing pep talk.
+      - One header line + one paragraph per job. Nothing else.
+      - Start with a single line: "Today's top <N>:".
+      - End with a single line: "_Full detail on any role: @jobhunter analyze-job <id>_".
 
-      **[Position Title](URL)** at Company
-      🔥 BRAND NEW - just posted! (or) Sent yesterday - still worth considering
-
-      **Great match because:** [4-5 lines max combining role fit, skills match, criteria alignment, and compensation]
-
-      **Minor considerations:** [4-5 lines max covering any gaps, concerns, or things to be aware of]
-
-      **Recommendation:** [ONE paragraph, 3-4 lines. Be direct. NO action items like "tailor your CV" or "reach out" - this is automated analysis]
-
-      ---
-
-      For secondary options (positions 2-3):
-      **[Position Title](URL)** at Company
-
-      **Why compelling:** [3-4 lines max]
-
-      **Considerations:** [3-4 lines max]
-
-      **Recommendation:** [2-3 lines, direct and concise]
-
-      Be selective, honest, and concise. Your client values brevity.
+      Be selective and honest — it's fine to pick just one, or say none clear the bar.
 
   # Freshness detection settings
   new_job_bonus: 15                    # Bonus points for NEW jobs
