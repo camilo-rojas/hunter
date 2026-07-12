@@ -147,6 +147,9 @@ class JobHunterService(BaseService):
         self.ai_temperature = ai_config.get('temperature', 0.3)
         self.ai_prescreen_threshold = ai_config.get('prescreen_threshold', 70)  # Pre-filter by criteria score
         self.ai_min_score = ai_config.get('min_score_threshold', 90)
+        # Digest rotation (freshness fix 2026-07-12): a job shown in a digest
+        # sits out this many days before it can headline again
+        self.renotify_cooldown_days = int(self.config.get('renotify_cooldown_days', 7))
         self.ai_cost_limit_daily = ai_config.get('cost_limit_daily', 5.00)
         self.cv_path = Path(ai_config.get('cv_path', 'data/cv/resume.md'))
         self.cv_dir = self.cv_path.parent
@@ -3996,7 +3999,9 @@ class JobHunterService(BaseService):
 
                 # Check if job already exists in database
                 if self.db_manager.job_exists_by_hash(company_id, job_hash):
-                    self.logger.debug(f"jobhunter: Job already exists (skipping): {job['title']}")
+                    # still listed — advance last_seen/times_seen (freshness fix)
+                    self.db_manager.touch_job_seen(company_id, job_hash)
+                    self.logger.debug(f"jobhunter: Job already exists (touched): {job['title']}")
                     continue
 
                 # Add company_id and job_hash to job dict
@@ -4127,20 +4132,24 @@ class JobHunterService(BaseService):
         Returns:
             Adjustment to score (positive for fresh, negative for stale)
         """
-        if job.get('is_new', 0):
-            return 15  # Maximum bonus for brand new postings
-
+        # Age from first_seen_date is AUTHORITATIVE; is_new is only a hint
+        # for rows without dates. (is_new was never cleared by the digest
+        # pipeline, so 7,773 jobs kept the +15 'brand new' bonus for months,
+        # the -10/week decay never applied, the freeze never fired, and the
+        # same top-3 repeated daily as '🔥 new' — owner report 2026-07-12.)
         from datetime import datetime
         first_seen_str = job.get('first_seen_date')
         if not first_seen_str:
-            return 0
+            return 15 if job.get('is_new', 0) else 0
 
         try:
             first_seen = datetime.fromisoformat(first_seen_str.replace('Z', '+00:00'))
             now = datetime.now(first_seen.tzinfo) if first_seen.tzinfo else datetime.now()
             age_days = (now - first_seen).days
-            weeks_old = age_days // 7
 
+            if age_days <= 1:
+                return 15  # brand new posting
+            weeks_old = age_days // 7
             if weeks_old == 0:
                 return 10  # Bonus for first week
             return -(weeks_old * 10)  # -10 per week after that
@@ -5146,8 +5155,33 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
             # Without AI, notify about all matched jobs (original behavior)
             summary = None
             if self.ai_enabled and ai_approved_jobs:
+                # Digest rotation (freshness fix 2026-07-12): jobs surfaced
+                # within the cooldown sit out, so each digest leads with
+                # material the owner hasn't just seen. Everything cooling
+                # down → fall back to the full list (never send nothing when
+                # there are approved jobs). Order by age-adjusted score so
+                # the -10/week decay ranks the digest too.
+                cooling = self.db_manager.get_recently_notified_job_ids(
+                    self.renotify_cooldown_days)
+                digest_batch = [m for m in ai_approved_jobs
+                                if m['job']['id'] not in cooling]
+                rotated_out = len(ai_approved_jobs) - len(digest_batch)
+                if not digest_batch:
+                    digest_batch = ai_approved_jobs
+                    rotated_out = 0
+                digest_batch.sort(
+                    key=lambda m: ((m.get('ai_result', {}).get('score')
+                                    or m['job'].get('ai_score') or 0)
+                                   + self._calculate_freshness_adjustment(m['job'])),
+                    reverse=True)
+                if rotated_out:
+                    self.logger.info(
+                        f"jobhunter: digest rotation — {rotated_out} job(s) in "
+                        f"{self.renotify_cooldown_days}d cooldown, "
+                        f"{len(digest_batch)} candidates")
+
                 # Generate professional hiring assistant summary
-                summary = self._generate_hiring_summary(ai_approved_jobs)
+                summary = self._generate_hiring_summary(digest_batch)
 
                 if summary:
                     # Private owner delivery (ADR-009 F3) — job matches are
@@ -5157,7 +5191,12 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
                         f"**🎯 JobHunter: Today's Top Opportunities**\n\n{summary}",
                         content_type="text/markdown"
                     )
-                    self.logger.debug(f"jobhunter: Sent hiring summary for {len(ai_approved_jobs)} approved jobs")
+                    # The summary picks its top ~3 (max 5) from the head of
+                    # the batch — start their cooldown + clear is_new
+                    for m in digest_batch[:5]:
+                        self.db_manager.mark_match_notified(m['job']['id'])
+                        self.db_manager.mark_job_as_seen(m['job']['id'])
+                    self.logger.debug(f"jobhunter: Sent hiring summary for {len(digest_batch)} approved jobs")
                 else:
                     # Summary generation failed - log error but don't spam with individual notifications
                     self.logger.error("jobhunter: Summary generation failed - no notifications sent")

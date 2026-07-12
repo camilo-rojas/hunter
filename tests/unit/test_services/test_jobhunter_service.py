@@ -3677,3 +3677,58 @@ class TestRunHistoryCommands:
         content = self._send_command(service, f"run-detail {run_id}")
         assert content is not None
         assert "Connection timeout" in content
+
+
+class TestFreshnessFix:
+    """2026-07-12 owner report: same jobs digested daily as '🔥 new' for
+    months. Root causes: is_new never cleared (short-circuited the -10/week
+    decay), re-scrapes never advanced last_seen/times_seen, and the digest
+    had no re-notify cooldown."""
+
+    def _svc(self):
+        svc = JobHunterService.__new__(JobHunterService)
+        return svc
+
+    def test_age_beats_stale_is_new_flag(self):
+        """A 5-month-old job with a stale is_new=1 must DECAY, not get +15."""
+        from datetime import datetime, timedelta, timezone
+        svc = self._svc()
+        old = (datetime.now(timezone.utc) - timedelta(days=155)).isoformat()
+        adj = svc._calculate_freshness_adjustment(
+            {'is_new': 1, 'first_seen_date': old})
+        assert adj == -220                       # 22 weeks * -10 (was +15)
+
+    def test_genuinely_new_job_gets_bonus(self):
+        from datetime import datetime, timezone
+        svc = self._svc()
+        now = datetime.now(timezone.utc).isoformat()
+        assert svc._calculate_freshness_adjustment(
+            {'is_new': 1, 'first_seen_date': now}) == 15
+
+    def test_first_week_bonus(self):
+        from datetime import datetime, timedelta, timezone
+        svc = self._svc()
+        d3 = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+        assert svc._calculate_freshness_adjustment(
+            {'is_new': 0, 'first_seen_date': d3}) == 10
+
+    def test_touch_job_seen_advances_tracking(self, tmp_path):
+        db = JobHunterDatabaseManager(str(tmp_path / "jh.db"))
+        db.initialize_database()
+        cid = db.add_company("TestCo", "https://example.com/careers")
+        jid = db.add_job_posting(cid, "hash1", "Engineer", "https://x/1")
+        db.touch_job_seen(cid, "hash1")
+        db.touch_job_seen(cid, "hash1")
+        job = db.get_job_by_id(jid)
+        assert job['times_seen'] == 3
+        assert job['last_seen_date'] > job['first_seen_date']
+
+    def test_notified_cooldown_roundtrip(self, tmp_path):
+        db = JobHunterDatabaseManager(str(tmp_path / "jh.db"))
+        db.initialize_database()
+        cid = db.add_company("TestCo", "https://example.com/careers")
+        jid = db.add_job_posting(cid, "hash1", "Engineer", "https://x/1")
+        db.update_job_match_ai_analysis(jid, 80.0, "reasons", "REVIEW")
+        assert db.get_recently_notified_job_ids(7) == set()
+        db.mark_match_notified(jid)
+        assert db.get_recently_notified_job_ids(7) == {jid}

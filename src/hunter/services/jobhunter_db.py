@@ -484,6 +484,41 @@ class JobHunterDatabaseManager:
             self.logger.debug(f"Updated job ID {job_id} with full details")
             return True
 
+    def touch_job_seen(self, company_id: int, job_hash: str) -> bool:
+        """A re-scrape found an EXISTING job: update last_seen_date and bump
+        times_seen (was never done — every job sat at times_seen=1 with
+        last_seen==first_seen forever, fixed 2026-07-12). Enables stale-job
+        detection: a job whose last_seen stops advancing has been delisted."""
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE job_postings
+                SET last_seen_date = ?, times_seen = times_seen + 1
+                WHERE company_id = ? AND job_hash = ?
+            """, (datetime.now(timezone.utc).isoformat(), company_id, job_hash))
+            return True
+
+    def mark_match_notified(self, job_id: int) -> bool:
+        """Record that a job was surfaced to the owner (digest/notification) —
+        drives the re-notify cooldown so daily digests rotate instead of
+        repeating the same top jobs."""
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE job_matches
+                SET notified_date = ?, notification_status = 'sent'
+                WHERE job_id = ?
+            """, (datetime.now(timezone.utc).isoformat(), job_id))
+            return True
+
+    def get_recently_notified_job_ids(self, days: int) -> set:
+        """Job ids surfaced to the owner within the last N days (cooldown)."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                SELECT DISTINCT job_id FROM job_matches
+                WHERE notified_date IS NOT NULL AND notified_date != ''
+                  AND notified_date >= datetime('now', ?)
+            """, (f"-{int(days)} days",))
+            return {row[0] for row in cursor.fetchall()}
+
     def mark_job_as_seen(self, job_id: int) -> bool:
         """
         Mark a job as seen (no longer new) after notification (Phase 9).
@@ -1126,18 +1161,25 @@ class JobHunterDatabaseManager:
                 ))
             else:
                 # Create new match record (for jobs that pass AI but not strict criteria)
+                # notified_date = '' sentinel — being AI-analyzed is NOT being
+                # notified; mark_match_notified stamps the real timestamp when
+                # the job is actually surfaced to the owner. (The schema
+                # declares NOT NULL and the old code stamped 'now' here, which
+                # poisoned the re-notify cooldown — fixed 2026-07-12. '' is
+                # falsy in Python and sorts before any ISO date in SQLite, so
+                # every 'if notified_date' / '>= cutoff' check treats it as
+                # never-notified.)
                 conn.execute("""
                     INSERT INTO job_matches (
                         job_id, match_score, ai_score, ai_reasoning,
                         ai_recommendation, ai_analyzed_date, notified_date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, '')
                 """, (
                     job_id,
                     ai_score,  # Use AI score as match_score
                     ai_score,
                     ai_reasoning,
                     ai_recommendation,
-                    datetime.now(timezone.utc).isoformat(),
                     datetime.now(timezone.utc).isoformat()
                 ))
 
