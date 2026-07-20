@@ -77,7 +77,7 @@ config:
   # Scheduled run times (loaded on first start, then managed via commands)
   # After first start, use: @jobhunter add-schedule "21:00"
   default_schedules:
-    - {time: "11:00", timezone: "America/New_York"}   # Morning check (after the 10:00 ET option motion)
+    - {time: "06:30", timezone: "America/New_York"}   # Morning check (results ready before the 07:00 hermes-agent top-10 pull)
     - {time: "13:00", timezone: "America/New_York"}   # Lunch check
     - {time: "17:00", timezone: "America/New_York"}   # Evening check
 
