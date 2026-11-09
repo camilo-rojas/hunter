@@ -1,0 +1,20 @@
+# Python / tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Runtime state — never commit (databases, secrets, logs, backups)
+data/
+logs/
+config/backups/
+.env
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# local handoff notes (never committed)
+CLAUDE.md
