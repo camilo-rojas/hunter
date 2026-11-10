@@ -149,7 +149,7 @@ def manifest() -> ServiceManifest:
             ),
             Command(
                 "load-cv",
-                "Extract your CV from the PDF in data/cv/",
+                "Extract your CV from the PDF in data/hunter/cv/",
                 label="Load CV",
                 section="profile",
                 params=[Param("args", kind="rest", hint="Usage: load-cv <file_path>")],

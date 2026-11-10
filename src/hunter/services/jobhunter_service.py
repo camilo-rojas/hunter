@@ -116,7 +116,7 @@ class JobHunterService(BaseService):
         super().__init__(name, config)
 
         # Get configuration
-        db_path = self.config.get('database_path', 'data/jobhunter.db')
+        db_path = self.config.get('database_path', 'data/hunter/jobhunter.db')
 
         # ADR-009 F3: jobhunter is a fully-personal service — the whole
         # workspace (companies, criteria, schedules, jobs, matches) belongs
@@ -159,7 +159,7 @@ class JobHunterService(BaseService):
         # sits out this many days before it can headline again
         self.renotify_cooldown_days = int(self.config.get('renotify_cooldown_days', 7))
         self.ai_cost_limit_daily = ai_config.get('cost_limit_daily', 5.00)
-        self.cv_path = Path(ai_config.get('cv_path', 'data/cv/resume.md'))
+        self.cv_path = Path(ai_config.get('cv_path', 'data/hunter/cv/resume.md'))
         self.cv_dir = self.cv_path.parent
         self.goal_path = self.cv_dir / 'goal.md'
         self.ai_prompt_template = ai_config.get('prompt_template', None)  # User-customizable job analysis prompt
@@ -267,7 +267,7 @@ class JobHunterService(BaseService):
             self.logger.info("jobhunter: Starting JobHunter service...")
 
             # Initialize database
-            db_path = self.config.get('database_path', 'data/jobhunter.db')
+            db_path = self.config.get('database_path', 'data/hunter/jobhunter.db')
 
             # Check if database file exists (to determine if this is first run)
             is_first_run = not os.path.exists(db_path)
@@ -555,7 +555,7 @@ class JobHunterService(BaseService):
                     "active_criteria": criteria_count,
                     "active_schedules": schedule_count,
                     "active_companies": company_count,
-                    "database_path": self.config.get('database_path', 'data/jobhunter.db')
+                    "database_path": self.config.get('database_path', 'data/hunter/jobhunter.db')
                 }
             }
 
@@ -771,7 +771,7 @@ class JobHunterService(BaseService):
 • **goal** — View current search goal
 • **goal** `<text>` — Set search goal (guides AI matching)
   Example: `@jobhunter goal VP Sales at a startup, remote, 250k base`
-• **load-cv** — Extract CV from PDF in `data/cv/` directory
+• **load-cv** — Extract CV from PDF in `data/hunter/cv/` directory
 
 **Service:**
 • **status** — Service health, config, and statistics
@@ -2579,7 +2579,7 @@ class JobHunterService(BaseService):
         Handle load-cv command - find PDF in cv directory and create resume.md.
 
         Usage:
-          load-cv           - Auto-detect PDF in data/cv/ directory
+          load-cv           - Auto-detect PDF in data/hunter/cv/ directory
         """
         try:
             # Ensure cv directory exists

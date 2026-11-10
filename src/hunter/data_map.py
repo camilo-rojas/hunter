@@ -5,7 +5,7 @@ personal workspace: no table holds rows per person, so none is exported or
 purged per user; the CV files ride the backups.
 """
 
-DB_PATHS = {"hunter": "data/jobhunter.db"}
+DB_PATHS = {"hunter": "data/hunter/jobhunter.db"}
 
 TABLE_MAP = [
     ("hunter", t, "shared", None)
@@ -14,4 +14,4 @@ TABLE_MAP = [
               "ai_analysis_log", "run_history")
 ]
 
-BACKUP_PATHS = ["data/cv/"]
+BACKUP_PATHS = ["data/hunter/cv/"]
