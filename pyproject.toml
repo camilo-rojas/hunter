@@ -23,7 +23,7 @@ dependencies = [
 dev = ["pytest>=7.0.0", "pytest-asyncio>=0.21.0", "pytest-timeout>=2.4.0"]
 
 [tool.uv.sources]
-rayserver = { git = "https://github.com/camilo-rojas/rayserver.git", tag = "v0.2.0" }
+rayserver = { git = "https://github.com/camilo-rojas/rayserver.git", tag = "v0.2.1" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
