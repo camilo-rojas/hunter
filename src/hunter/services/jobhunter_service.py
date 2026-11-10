@@ -80,11 +80,11 @@ def _retry_wait(status: Optional[int], attempt: int) -> int:
         return 30 * (attempt + 1)
     return 10 * (attempt + 1)
 
-from robotray.services.base import BaseService
-from robotray.services.jobhunter_db import JobHunterDatabaseManager
-from robotray.core.messaging import SecureMessage, MessagePriority
-from robotray.core.secrets_manager import SecretsManager
-from robotray.utils.secret_helper import get_secret_for_user
+from rayserver.services.base import BaseService
+from hunter.services.jobhunter_db import JobHunterDatabaseManager
+from rayserver.core.messaging import SecureMessage, MessagePriority
+from rayserver.core.secrets_manager import SecretsManager
+from rayserver.utils.secret_helper import get_secret_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -1071,7 +1071,7 @@ class JobHunterService(BaseService):
             content_type: MIME type - "text/plain", "text/markdown", "text/html", "application/json"
         """
         try:
-            from robotray.core.messaging import MessageMetadata
+            from rayserver.core.messaging import MessageMetadata
 
             metadata = MessageMetadata(
                 sender_service=self.name,
@@ -4163,7 +4163,7 @@ class JobHunterService(BaseService):
     def _get_user_db(self):
         """Lazy-initialize UserDatabaseManager for per-user secret lookups."""
         if self._user_db is None:
-            from robotray.auth.user_db import UserDatabaseManager
+            from rayserver.auth.user_db import UserDatabaseManager
             self._user_db = UserDatabaseManager()
         return self._user_db
 

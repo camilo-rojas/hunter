@@ -18,8 +18,8 @@ import time
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from robotray.services.jobhunter_service import JobHunterService
-from robotray.services.jobhunter_db import JobHunterDatabaseManager
+from hunter.services.jobhunter_service import JobHunterService
+from hunter.services.jobhunter_db import JobHunterDatabaseManager
 
 
 class TestJobHunterDatabase:
@@ -358,7 +358,7 @@ class TestJobHunterMessageHandling:
 
     def test_help_command(self, service):
         """Test help command."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         from unittest.mock import Mock
         import time
 
@@ -396,7 +396,7 @@ class TestJobHunterMessageHandling:
 
     def test_add_company_command(self, service):
         """Test add-company command."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         # Create add-company command (no quotes needed - use underscores for multi-word names)
@@ -428,7 +428,7 @@ class TestJobHunterMessageHandling:
 
     def test_list_companies_empty(self, service):
         """Test list-companies with no companies."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         metadata = MessageMetadata(
@@ -449,7 +449,7 @@ class TestJobHunterMessageHandling:
 
     def test_list_companies_with_data(self, service):
         """Test list-companies with companies."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         # Add some companies
@@ -478,7 +478,7 @@ class TestJobHunterMessageHandling:
 
     def test_remove_company_command(self, service):
         """Test remove-company command."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         # Add a company first
@@ -507,7 +507,7 @@ class TestJobHunterMessageHandling:
 
     def test_status_command(self, service):
         """Test status command."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         metadata = MessageMetadata(
@@ -532,7 +532,7 @@ class TestJobHunterMessageHandling:
 
     def test_unknown_command(self, service):
         """Test unknown command handling."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         metadata = MessageMetadata(
@@ -554,7 +554,7 @@ class TestJobHunterMessageHandling:
 
     def test_add_company_validation(self, service):
         """Test add-company input validation."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         # Missing arguments
@@ -577,7 +577,7 @@ class TestJobHunterMessageHandling:
 
     # -------------------------------------------------- ADR-009 F3 owner gate
     def _send(self, service, content, user_id):
-        from robotray.core.messaging import SecureMessage, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessageMetadata
         import time
         service.message_queues.inbound_queue.put_nowait(SecureMessage(
             payload={"content": content},
@@ -638,7 +638,7 @@ class TestJobHunterCriteriaManagement:
 
     def send_command(self, service, command):
         """Helper to send command and get response."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         metadata = MessageMetadata(
@@ -974,7 +974,7 @@ class TestJobHunterRangeSupport:
 
     def send_command(self, service, command):
         """Helper to send command and get response."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         import time
 
         metadata = MessageMetadata(
@@ -1165,7 +1165,7 @@ class TestPhase5_5DeepScraping:
     @pytest.fixture
     def db_manager(self, temp_db):
         """Create database manager with temporary database."""
-        from robotray.services.jobhunter_db import JobHunterDatabaseManager
+        from hunter.services.jobhunter_db import JobHunterDatabaseManager
         manager = JobHunterDatabaseManager(temp_db)
         manager.initialize_database()
         return manager
@@ -1173,7 +1173,7 @@ class TestPhase5_5DeepScraping:
     @pytest.fixture
     def service(self, temp_db):
         """Create JobHunter service with temporary database."""
-        from robotray.services.jobhunter_service import JobHunterService
+        from hunter.services.jobhunter_service import JobHunterService
         service = JobHunterService(
             name="jobhunter",
             config={"database_path": temp_db}
@@ -1184,7 +1184,7 @@ class TestPhase5_5DeepScraping:
 
     def send_command(self, service, command):
         """Helper to send command and capture response."""
-        from robotray.core.messaging import SecureMessage, MessageMetadata, MessagePriority
+        from rayserver.core.messaging import SecureMessage, MessageMetadata, MessagePriority
         from unittest.mock import Mock
 
         # Create message with proper metadata
@@ -1582,7 +1582,7 @@ class TestPhase6_Scheduler:
 
     def send_command(self, service, command_str):
         """Helper to send command and get response."""
-        from robotray.core.messaging import SecureMessage, MessageMetadata, MessagePriority
+        from rayserver.core.messaging import SecureMessage, MessageMetadata, MessagePriority
 
         # Create a proper SecureMessage object
         message = SecureMessage(
@@ -2150,7 +2150,7 @@ class TestPhase7_ScheduleManagement:
 
     def send_command(self, service, command_str):
         """Helper to send command and get response."""
-        from robotray.core.messaging import SecureMessage, MessageMetadata, MessagePriority
+        from rayserver.core.messaging import SecureMessage, MessageMetadata, MessagePriority
 
         message = SecureMessage(
             metadata=MessageMetadata(
@@ -2759,7 +2759,7 @@ class TestAIAnalysis:
         def mock_secrets_init(self):
             return mock_secrets
         
-        monkeypatch.setattr('robotray.services.jobhunter_service.SecretsManager', 
+        monkeypatch.setattr('hunter.services.jobhunter_service.SecretsManager', 
                            lambda: mock_secrets)
         
         # Create service
@@ -2769,7 +2769,7 @@ class TestAIAnalysis:
         service._send_response = Mock()
         
         # Initialize database manager
-        from robotray.services.jobhunter_db import JobHunterDatabaseManager
+        from hunter.services.jobhunter_db import JobHunterDatabaseManager
         service.db_manager = JobHunterDatabaseManager(temp_db)
         service.db_manager.initialize_database()
         
@@ -2875,7 +2875,7 @@ class TestAIAnalysis:
     def test_ai_analysis_llm_500_handled_cleanly(self, service_with_ai, db_manager, caplog):
         """A 5xx from the LLM gateway (after retries) is skipped without a traceback."""
         import logging
-        from robotray.services.jobhunter_service import _API_STATUS_ERRORS
+        from hunter.services.jobhunter_service import _API_STATUS_ERRORS
 
         company_id = db_manager.add_company("Test Company", "https://example.com/jobs")
         job_id = db_manager.add_job_posting(
@@ -3570,7 +3570,7 @@ class TestRunHistoryCommands:
 
     def _send_command(self, service, command_text):
         """Send a command to the service and return the response content."""
-        from robotray.core.messaging import SecureMessage, MessagePriority, MessageMetadata
+        from rayserver.core.messaging import SecureMessage, MessagePriority, MessageMetadata
         metadata = MessageMetadata(
             sender_service="test-service",
             target_service="jobhunter",
