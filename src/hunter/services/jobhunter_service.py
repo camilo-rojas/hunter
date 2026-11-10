@@ -97,6 +97,14 @@ class JobHunterService(BaseService):
     functionality accessible from all channels via @ routing.
     """
 
+    @classmethod
+    def describe_commands(cls):
+        """The command manifest: menus, forms, the assistant and MCP build
+        from it (hunter.manifest)."""
+        from hunter.manifest import manifest
+
+        return manifest()
+
     def __init__(self, name: str, config: Optional[Dict[str, Any]] = None):
         """
         Initialize JobHunter service.

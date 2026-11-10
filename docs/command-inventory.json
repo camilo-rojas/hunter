@@ -1,0 +1,327 @@
+{
+ "dispatch": {
+  "jobhunter": [
+   "add-company",
+   "add-criteria",
+   "add-criteria-value",
+   "add-schedule",
+   "ai-stats",
+   "analyze-job",
+   "deep-match",
+   "goal",
+   "help",
+   "history",
+   "last-run",
+   "list-ai-approved",
+   "list-companies",
+   "list-criteria",
+   "list-new-jobs",
+   "list-schedules",
+   "list-stale-jobs",
+   "load-cv",
+   "remove-company",
+   "remove-criteria",
+   "remove-criteria-value",
+   "remove-schedule",
+   "run-detail",
+   "run-now",
+   "score-jobs",
+   "scrape-company",
+   "status",
+   "test-criteria",
+   "top-10"
+  ]
+ },
+ "source": "RobotRay2 v0.6.0.24-final",
+ "telegram": {
+  "jobhunter": [
+   "add-company <name> <url>",
+   "add-criteria <name> <type> [weight]",
+   "add-schedule \\",
+   "ai-stats [days]",
+   "analyze-job <job_id>",
+   "deep-match [min_score] [limit]",
+   "goal",
+   "goal <text>",
+   "help",
+   "history [limit]",
+   "last-run",
+   "list-ai-approved [limit]",
+   "list-companies",
+   "list-criteria",
+   "list-new-jobs",
+   "list-schedules",
+   "list-stale-jobs [days]",
+   "load-cv",
+   "remove-company <id>",
+   "remove-criteria <id>",
+   "remove-schedule <id>",
+   "run-detail <id>",
+   "run-now",
+   "score-jobs <job_id>",
+   "score-jobs [limit] [min_score]",
+   "status",
+   "test-criteria <job_text>",
+   "top-10"
+  ]
+ },
+ "web": {
+  "jobhunter": {
+   "color": "cyan",
+   "commands": [
+    {
+     "args": "",
+     "help": null,
+     "label": "Run Now",
+     "params": [],
+     "requires_input": false,
+     "section": "Workflow",
+     "subsection": null,
+     "token": "run-now"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "Top 10 Jobs",
+     "params": [],
+     "requires_input": false,
+     "section": "Workflow",
+     "subsection": null,
+     "token": "top-10"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "Service Status",
+     "params": [],
+     "requires_input": false,
+     "section": "Workflow",
+     "subsection": null,
+     "token": "status"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "List Companies",
+     "params": [],
+     "requires_input": false,
+     "section": "Companies",
+     "subsection": null,
+     "token": "list-companies"
+    },
+    {
+     "args": "",
+     "help": "Usage: add-company <name> <url>",
+     "label": "Add Company",
+     "params": [],
+     "requires_input": true,
+     "section": "Companies",
+     "subsection": null,
+     "token": "add-company"
+    },
+    {
+     "args": "",
+     "help": "Usage: remove-company <id>",
+     "label": "Remove Company",
+     "params": [],
+     "requires_input": true,
+     "section": "Companies",
+     "subsection": null,
+     "token": "remove-company"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "List Criteria",
+     "params": [],
+     "requires_input": false,
+     "section": "Search Criteria",
+     "subsection": null,
+     "token": "list-criteria"
+    },
+    {
+     "args": "",
+     "help": "Usage: add-criteria <name> <type> [weight]",
+     "label": "Add Criteria",
+     "params": [],
+     "requires_input": true,
+     "section": "Search Criteria",
+     "subsection": null,
+     "token": "add-criteria"
+    },
+    {
+     "args": "",
+     "help": "Usage: remove-criteria <id>",
+     "label": "Remove Criteria",
+     "params": [],
+     "requires_input": true,
+     "section": "Search Criteria",
+     "subsection": null,
+     "token": "remove-criteria"
+    },
+    {
+     "args": "",
+     "help": "Usage: test-criteria <job_text>",
+     "label": "Test Criteria",
+     "params": [],
+     "requires_input": true,
+     "section": "Search Criteria",
+     "subsection": null,
+     "token": "test-criteria"
+    },
+    {
+     "args": "",
+     "help": "Usage: score-jobs [limit] [min_score]",
+     "label": "Score Jobs",
+     "params": [],
+     "requires_input": false,
+     "section": "Jobs & Matches",
+     "subsection": null,
+     "token": "score-jobs"
+    },
+    {
+     "args": "",
+     "help": "Usage: deep-match [min_score] [limit]",
+     "label": "Deep Match",
+     "params": [],
+     "requires_input": false,
+     "section": "Jobs & Matches",
+     "subsection": null,
+     "token": "deep-match"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "List New Jobs",
+     "params": [],
+     "requires_input": false,
+     "section": "Jobs & Matches",
+     "subsection": null,
+     "token": "list-new-jobs"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "List Stale Jobs",
+     "params": [],
+     "requires_input": false,
+     "section": "Jobs & Matches",
+     "subsection": null,
+     "token": "list-stale-jobs"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "List AI Approved",
+     "params": [],
+     "requires_input": false,
+     "section": "Jobs & Matches",
+     "subsection": null,
+     "token": "list-ai-approved"
+    },
+    {
+     "args": "",
+     "help": "Usage: analyze-job <job_id>",
+     "label": "Analyze Job",
+     "params": [],
+     "requires_input": true,
+     "section": "AI Analysis",
+     "subsection": null,
+     "token": "analyze-job"
+    },
+    {
+     "args": "",
+     "help": "Usage: ai-stats [days]",
+     "label": "AI Statistics",
+     "params": [],
+     "requires_input": false,
+     "section": "AI Analysis",
+     "subsection": null,
+     "token": "ai-stats"
+    },
+    {
+     "args": "",
+     "help": "Usage: history [limit]",
+     "label": "History",
+     "params": [],
+     "requires_input": false,
+     "section": "Run History",
+     "subsection": null,
+     "token": "history"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "Last Run",
+     "params": [],
+     "requires_input": false,
+     "section": "Run History",
+     "subsection": null,
+     "token": "last-run"
+    },
+    {
+     "args": "",
+     "help": "Usage: run-detail <run_id>",
+     "label": "Run Detail",
+     "params": [],
+     "requires_input": true,
+     "section": "Run History",
+     "subsection": null,
+     "token": "run-detail"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "Goal",
+     "params": [],
+     "requires_input": false,
+     "section": "Profile",
+     "subsection": null,
+     "token": "goal"
+    },
+    {
+     "args": "",
+     "help": "Usage: load-cv <file_path>",
+     "label": "Load CV",
+     "params": [],
+     "requires_input": true,
+     "section": "Profile",
+     "subsection": null,
+     "token": "load-cv"
+    },
+    {
+     "args": "",
+     "help": null,
+     "label": "List Schedules",
+     "params": [],
+     "requires_input": false,
+     "section": "Scheduling",
+     "subsection": null,
+     "token": "list-schedules"
+    },
+    {
+     "args": "",
+     "help": "Usage: add-schedule \"HH:MM\" [timezone]",
+     "label": "Add Schedule",
+     "params": [],
+     "requires_input": true,
+     "section": "Scheduling",
+     "subsection": null,
+     "token": "add-schedule"
+    },
+    {
+     "args": "",
+     "help": "Usage: remove-schedule <id>",
+     "label": "Remove Schedule",
+     "params": [],
+     "requires_input": true,
+     "section": "Scheduling",
+     "subsection": null,
+     "token": "remove-schedule"
+    }
+   ],
+   "icon": "🎯",
+   "name": "JobHunter"
+  }
+ }
+}
