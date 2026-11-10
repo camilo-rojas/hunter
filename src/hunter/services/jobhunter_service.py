@@ -89,6 +89,78 @@ from rayserver.utils.secret_helper import get_secret_for_user
 logger = logging.getLogger(__name__)
 
 
+def parse_analysis_reply(text: str):
+    """The model's job analysis as a dict, and whether the reply was cut off.
+
+    The reply is JSON, often inside a ```json fence and sometimes followed
+    by a remark. A model that reasons at length can run into the token
+    limit mid-reply: no closing brace, no closing fence. The score comes
+    first in the reply, so a cut-off one still says what matters; it is
+    kept — the reasoning as far as it got, the missing fields filled in
+    (the recommendation from the score, as the prompt defines it) — instead
+    of discarding the whole analysis. Braces and brackets inside strings
+    don't count. Raises ValueError when there is no object or no score.
+    """
+    body = (text or "").strip()
+    if not body:
+        raise ValueError("Empty response from AI")
+    start = body.find("{")
+    if start == -1:
+        raise ValueError("No JSON object found in response")
+    stack, commas, in_string, escaped, end = [], [], False, False, -1
+    for i in range(start, len(body)):
+        ch = body[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            if not stack:
+                end = i
+                break
+        elif ch == "," and len(stack) == 1:
+            commas.append(i)
+    if end != -1:
+        return json.loads(body[start:end + 1]), False
+
+    # cut off: close what was open; failing that, keep the complete fields
+    piece = body[start:-1] if escaped else body[start:]
+    closers = "".join("}" if opener == "{" else "]" for opener in reversed(stack))
+    attempts = [piece + ('"' if in_string else "") + closers]
+    attempts += [body[start:comma] + "}" for comma in reversed(commas)]
+    result = None
+    for attempt in attempts:
+        try:
+            result = json.loads(attempt)
+            break
+        except json.JSONDecodeError:
+            continue
+    if not isinstance(result, dict) or "ai_score" not in result:
+        raise ValueError("The AI reply was cut off before its score")
+    try:
+        score = float(result["ai_score"])
+    except (TypeError, ValueError):
+        raise ValueError("The AI reply was cut off before its score")
+    reasoning = str(result.get("reasoning") or "").rstrip()
+    result["reasoning"] = (reasoning + " …") if reasoning else "(the reply was cut off before the reasoning)"
+    result.setdefault("fit_summary", "")
+    if not isinstance(result.get("concerns"), list):
+        result["concerns"] = []
+    if result.get("recommendation") not in ("APPLY", "REVIEW", "SKIP"):
+        result["recommendation"] = "APPLY" if score >= 90 else "REVIEW" if score >= 70 else "SKIP"
+    return result, True
+
+
 class JobHunterService(BaseService):
     """
     Automated job hunting service with intelligent matching.
@@ -150,7 +222,7 @@ class JobHunterService(BaseService):
         self.ai_timeout = ai_config.get('api_timeout', 120)
         self.ai_model = ai_config.get('model', 'default')
         self.ai_summary_model = ai_config.get('summary_model', 'default')  # final hiring summary
-        self.ai_max_tokens = ai_config.get('max_tokens', 1000)
+        self.ai_max_tokens = ai_config.get('max_tokens', 2000)
         self.ai_summary_max_tokens = ai_config.get('summary_max_tokens', 2000)  # More tokens for summary
         self.ai_temperature = ai_config.get('temperature', 0.3)
         self.ai_prescreen_threshold = ai_config.get('prescreen_threshold', 70)  # Pre-filter by criteria score
@@ -4418,45 +4490,14 @@ Respond in JSON format:
             # Log raw response for debugging
             self.logger.debug(f"jobhunter: Raw AI response (first 500 chars): {result_text[:500]}")
 
-            # Strip markdown code blocks if present
-            if '```' in result_text:
-                # Extract JSON from code block
-                import re
-                json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', result_text, re.DOTALL)
-                if json_match:
-                    result_text = json_match.group(1)
-                    self.logger.debug(f"jobhunter: Extracted JSON from markdown: {result_text[:300]}")
-                else:
-                    self.logger.warning(f"jobhunter: Found ``` but couldn't extract JSON, trying full text")
-
-            # Try to parse JSON
-            result_text = result_text.strip()
-            if not result_text:
-                raise ValueError("Empty response from AI")
-
-            # Extract only the JSON object (handle extra text after JSON)
-            # Find the first { and last } to extract just the JSON portion
-            first_brace = result_text.find('{')
-            if first_brace == -1:
-                raise ValueError("No JSON object found in response")
-
-            # Find matching closing brace
-            brace_count = 0
-            last_brace = -1
-            for i in range(first_brace, len(result_text)):
-                if result_text[i] == '{':
-                    brace_count += 1
-                elif result_text[i] == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        last_brace = i
-                        break
-
-            if last_brace == -1:
-                raise ValueError("Unmatched braces in JSON response")
-
-            json_only = result_text[first_brace:last_brace + 1]
-            result = json.loads(json_only)
+            # The reply as a dict: fenced or not, with or without a remark
+            # after it, and still usable when it was cut off at the token limit
+            result, cut_off = parse_analysis_reply(result_text)
+            if cut_off:
+                self.logger.warning(
+                    f"jobhunter: AI reply for job {job.get('id', '?')} was cut off at "
+                    f"max_tokens={self.ai_max_tokens}; kept its score {result['ai_score']} "
+                    f"and what it had written (raise ai_analysis.max_tokens if this repeats)")
 
             # Calculate cost
             input_tokens = self._extract_input_tokens(response)
