@@ -2851,7 +2851,7 @@ class JobHunterService(BaseService):
     # Web Scraping (Phase 4)
     # ============================================================================
 
-    def _check_robots_txt(self, base_url: str, user_agent: str = "RobotRay JobHunter") -> bool:
+    def _check_robots_txt(self, base_url: str, user_agent: str = "Fin JobHunter") -> bool:
         """
         Check if scraping is allowed by robots.txt.
 
@@ -2909,7 +2909,7 @@ class JobHunterService(BaseService):
                 self.logger.debug(f"jobhunter: Fetching {url} (attempt {attempt + 1}/{max_retries})")
 
                 headers = {
-                    'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                    'User-Agent': 'Fin JobHunter/1.0 (Career Page Monitor)',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.5',
                     'Accept-Encoding': 'gzip, deflate',
@@ -3248,7 +3248,7 @@ class JobHunterService(BaseService):
                     self.logger.info(f"jobhunter: Fetching Greenhouse job details from API: {api_url}")
 
                 headers = {
-                    'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                    'User-Agent': 'Fin JobHunter/1.0 (Career Page Monitor)',
                     'Accept': 'application/json'
                 }
                 response = requests.get(api_url, headers=headers, timeout=self.request_timeout)
@@ -3486,7 +3486,7 @@ class JobHunterService(BaseService):
             api_url = f"https://api.lever.co/v0/postings/{company_slug}/{job_uuid}"
 
             headers = {
-                'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                'User-Agent': 'Fin JobHunter/1.0 (Career Page Monitor)',
                 'Accept': 'application/json'
             }
 
@@ -3649,7 +3649,7 @@ class JobHunterService(BaseService):
 
                 try:
                     headers = {
-                        'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                        'User-Agent': 'Fin JobHunter/1.0 (Career Page Monitor)',
                         'Accept': 'application/json'
                     }
                     response = requests.get(api_url, headers=headers, timeout=self.request_timeout)
@@ -3956,7 +3956,7 @@ class JobHunterService(BaseService):
                 self.logger.info(f"jobhunter: Fetching Lever API: {api_url}")
 
             headers = {
-                'User-Agent': 'RobotRay JobHunter/1.0 (Career Page Monitor)',
+                'User-Agent': 'Fin JobHunter/1.0 (Career Page Monitor)',
                 'Accept': 'application/json'
             }
 
