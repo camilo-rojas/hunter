@@ -786,76 +786,19 @@ class JobHunterService(BaseService):
     # ============================================================================
 
     def _handle_help(self, sender: str, correlation_id: str = None):
-        """Handle help command."""
-        help_text = """**JobHunter Service Commands**
-
-**Company Management:**
-• **add-company** `<name> <url> [scraper_type]` — Add company to monitor
-  Types: generic (default), greenhouse, lever, ashby
-  Example: `@jobhunter add-company Anthropic https://www.anthropic.com/careers`
-• **list-companies** — Show all tracked companies
-• **remove-company** `<id>` — Remove a company
-• **scrape-company** `<id>` — Manually scrape a company's career page
-
-**Search Criteria:**
-• **add-criteria** `<name> <type> [weight]` — Create a criterion
-  Types: simple, group-any, group-all, group-tiered
-  Example: `@jobhunter add-criteria remote simple 15`
-• **add-criteria-value** `<name> <value> [tier] [weight]` — Add value to group criterion
-  Tiers (group-tiered only): preferred, acceptable, undesirable
-  Ranges: `"200k+"`, `"100k-150k"`, `"5+"`
-  Example: `@jobhunter add-criteria-value salary "200k+" preferred 25`
-• **list-criteria** — Show all criteria with IDs
-• **remove-criteria** `<id>` — Remove criterion by ID
-• **remove-criteria-value** `<name> <value>` — Remove value from group criterion
-• **test-criteria** `<job_text>` — Test scoring against sample text
-  Example: `@jobhunter test-criteria Senior Engineer - Remote - $250k`
-
-**Job Scoring & Matching:**
-• **score-jobs** `[limit] [min_score]` — Score jobs against criteria (default: 50, 0)
-  Example: `@jobhunter score-jobs 20 70`
-• **score-jobs** `<job_id>` — Full details for a specific job
-• **deep-match** `[min_score] [limit]` — Deep scrape matched jobs (default: 60, 50)
-• **list-new-jobs** — Show newly detected jobs
-• **list-stale-jobs** `[days]` — Jobs older than N days (default: 14)
-
-**Workflow & Scheduling:**
-• **run-now** — Trigger full workflow: scrape → score → deep-match → AI analysis
-• **top-10** — Show top 10 AI-scored jobs from last run
-• **add-schedule** `<HH:MM> [timezone]` — Add daily run time
-  Example: `@jobhunter add-schedule "09:00" "America/New_York"`
-• **list-schedules** — Show scheduled run times
-• **remove-schedule** `<id>` — Remove a schedule
-
-**Run History:**
-• **history** `[limit]` — Recent run history table (default: 10)
-• **last-run** — Summary of the most recent completed run
-• **run-detail** `<id>` — Full details for a specific run
-  Example: `@jobhunter run-detail 5`
-
-**AI Analysis:** (requires `ai_analysis.enabled: true` in config)
-• **analyze-job** `<job_id>` — AI analysis vs CV + criteria + goal
-  Returns: score (0-100), reasoning, recommendation (APPLY/REVIEW/SKIP)
-• **ai-stats** `[days]` — AI usage cost statistics (default: 7)
-• **list-ai-approved** `[limit]` — Jobs approved by AI (default: 20)
-
-**Profile:**
-• **goal** — View current search goal
-• **goal** `<text>` — Set search goal (guides AI matching)
-  Example: `@jobhunter goal VP Sales at a startup, remote, 250k base`
-• **load-cv** — Extract CV from PDF in `data/hunter/cv/` directory
-
-**Service:**
-• **status** — Service health, config, and statistics
-• **help** — This help message
+        """`help`: the commands from the manifest (the one list the menus,
+        forms and MCP tools also use), then what is not a command."""
+        text = self.describe_commands().help_text()
+        text += """
 
 **Notes:**
+• Scraper types for add-company: generic (default), greenhouse, lever, ashby
+• Criterion types: simple, group-any, group-all, group-tiered; tiers (group-tiered only): preferred, acceptable, undesirable; ranges: `"200k+"`, `"100k-150k"`, `"5+"`
 • Multi-word company names use underscores: `Y_Combinator`
 • Quote multi-word values: `"US West"`, `"Sales Engineering"`
 • Scores: 70+ high priority, 60-69 good match, <60 review carefully
-        """.strip()
-
-        self._send_response(sender, help_text, correlation_id=correlation_id)
+• AI analysis needs `ai_analysis.enabled: true` in config; `load-cv` reads the PDF in `data/hunter/cv/`"""
+        self._send_response(sender, text, correlation_id=correlation_id)
 
     def _handle_add_company(self, sender: str, args: List[str], correlation_id: str = None):
         """Handle add-company command."""

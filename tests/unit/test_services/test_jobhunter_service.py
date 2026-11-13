@@ -386,7 +386,7 @@ class TestJobHunterMessageHandling:
         response = service.message_queues.outbound_queue.get_nowait()
 
         assert response.metadata.target_service == "test-service"
-        assert "JobHunter Service" in response.payload["content"]
+        assert "**JobHunter**" in response.payload["content"]
         assert "add-company" in response.payload["content"]
         assert "score-jobs" in response.payload["content"]
         assert "history" in response.payload["content"]
@@ -607,7 +607,7 @@ class TestJobHunterMessageHandling:
     def test_help_open_without_identity(self, service):
         """help needs no identity — it exposes nothing personal."""
         out = self._send(service, "help", user_id=None)
-        assert "JobHunter Service" in out
+        assert "**JobHunter**" in out and "add-company" in out
 
 
 class TestJobHunterCriteriaManagement:
