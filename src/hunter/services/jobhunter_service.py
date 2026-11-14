@@ -229,6 +229,7 @@ class JobHunterService(BaseService):
         # back EMPTY, cut off at its 900-token limit, three days running. For the
         # summary, ask for no reasoning (OpenAI-compatible providers only).
         self.ai_summary_reasoning_effort = ai_config.get('summary_reasoning_effort', 'none')
+        self._scrape_seen: Dict[int, int] = {}   # company id → postings its last scrape returned
         self.ai_temperature = ai_config.get('temperature', 0.3)
         self.ai_prescreen_threshold = ai_config.get('prescreen_threshold', 70)  # Pre-filter by criteria score
         self.ai_min_score = ai_config.get('min_score_threshold', 90)
@@ -4018,17 +4019,22 @@ class JobHunterService(BaseService):
                 self.logger.warning(f"jobhunter: {company_name}: No jobs found")
                 return []
 
-            # Deduplicate using job hash
+            # Deduplicate using job hash. ONE identity for a posting: the
+            # stored hash is `_generate_job_hash` (title|url). Until 2026-11-14
+            # this function hashed title:url while the scheduled run saved
+            # title|url, so a known posting was never recognised here, never
+            # marked as seen again, and a delisted one never left the list.
+            # Rows saved under the old title:url hash are still matched.
             new_jobs = []
+            self._scrape_seen[company_id] = len(jobs)
             for job in jobs:
-                # Create hash from title + url
-                job_hash_input = f"{job['title']}:{job['url']}"
-                job_hash = hashlib.sha256(job_hash_input.encode()).hexdigest()
-
-                # Check if job already exists in database
-                if self.db_manager.job_exists_by_hash(company_id, job_hash):
-                    # still listed — advance last_seen/times_seen (freshness fix)
-                    self.db_manager.touch_job_seen(company_id, job_hash)
+                job_hash = self._generate_job_hash(job['title'], job['url'])
+                legacy = hashlib.sha256(f"{job['title']}:{job['url']}".encode()).hexdigest()
+                known = next((h for h in (job_hash, legacy)
+                              if self.db_manager.job_exists_by_hash(company_id, h)), None)
+                if known:
+                    # still listed — advance last_seen/times_seen
+                    self.db_manager.touch_job_seen(company_id, known)
                     self.logger.debug(f"jobhunter: Job already exists (touched): {job['title']}")
                     continue
 
@@ -4968,6 +4974,8 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
         run_id = None
         try:
             start_time = time.time()
+            run_started = datetime.now(timezone.utc).isoformat()
+            self._scrape_seen = {}
             run_id = self.db_manager.create_run(trigger_type)
             self.logger.debug("=" * 60)
             self.logger.debug("jobhunter: 🚀 Starting Daily Scrape Workflow")
@@ -4998,10 +5006,10 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
                         scraper_type=company.get('scraper_type', 'generic')
                     )
 
-                    # Count new jobs
+                    # Count new jobs (_scrape_company returns only new ones)
                     new_count = 0
                     for job in jobs:
-                        job_hash = self._generate_job_hash(job['title'], job['url'])
+                        job_hash = job.get('job_hash') or self._generate_job_hash(job['title'], job['url'])
                         if not self.db_manager.job_exists_by_hash(company['id'], job_hash):
                             new_count += 1
                             self.db_manager.add_job_posting(
@@ -5029,6 +5037,16 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
 
             if self.verbose_logging:
                 self.logger.info(f"jobhunter: \n📊 Light Scrape Summary: {total_jobs_scraped} total, {total_new_jobs} new jobs")
+
+            # Step 2b: a posting a company no longer lists is closed. Only for a
+            # company whose scrape returned jobs — a failed or empty scrape
+            # (404, timeout, a site change) must never close everything.
+            closed = 0
+            for company_id, found in self._scrape_seen.items():
+                if found:
+                    closed += self.db_manager.deactivate_unseen_jobs(company_id, run_started)
+            if closed:
+                self.logger.info(f"jobhunter: 🗂 {closed} posting(s) no longer listed — marked closed")
 
             # Step 3: Score all recent jobs
             if self.verbose_logging:

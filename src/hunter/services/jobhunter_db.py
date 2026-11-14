@@ -497,6 +497,18 @@ class JobHunterDatabaseManager:
             """, (datetime.now(timezone.utc).isoformat(), company_id, job_hash))
             return True
 
+    def deactivate_unseen_jobs(self, company_id: int, seen_since: str) -> int:
+        """Close the company's postings that the scrape started at
+        `seen_since` did not see: the company no longer lists them. Returns
+        how many were closed. They stay in the table (history, AI log)."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                UPDATE job_postings SET is_active = 0
+                WHERE company_id = ? AND is_active = 1
+                  AND COALESCE(last_seen_date, first_seen_date, scraped_date) < ?
+            """, (company_id, seen_since))
+            return cursor.rowcount
+
     def mark_match_notified(self, job_id: int) -> bool:
         """Record that a job was surfaced to the owner (digest/notification) —
         drives the re-notify cooldown so daily digests rotate instead of
@@ -567,7 +579,7 @@ class JobHunterDatabaseManager:
                     SELECT j.*, c.name as company_name
                     FROM job_postings j
                     LEFT JOIN companies c ON j.company_id = c.id
-                    WHERE j.company_id = ?
+                    WHERE j.company_id = ? AND j.is_active = 1
                     ORDER BY j.scraped_date DESC
                     LIMIT ?
                 """, (company_id, limit))
@@ -576,6 +588,7 @@ class JobHunterDatabaseManager:
                     SELECT j.*, c.name as company_name
                     FROM job_postings j
                     LEFT JOIN companies c ON j.company_id = c.id
+                    WHERE j.is_active = 1 AND COALESCE(c.active, 1) = 1
                     ORDER BY j.scraped_date DESC
                     LIMIT ?
                 """, (limit,))
