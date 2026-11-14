@@ -224,6 +224,11 @@ class JobHunterService(BaseService):
         self.ai_summary_model = ai_config.get('summary_model', 'default')  # final hiring summary
         self.ai_max_tokens = ai_config.get('max_tokens', 2000)
         self.ai_summary_max_tokens = ai_config.get('summary_max_tokens', 2000)  # More tokens for summary
+        # The LLM proxy sometimes lets the model reason before it writes, and the
+        # reasoning counts against max_tokens: on 2026-11-12/13/14 the digest came
+        # back EMPTY, cut off at its 900-token limit, three days running. For the
+        # summary, ask for no reasoning (OpenAI-compatible providers only).
+        self.ai_summary_reasoning_effort = ai_config.get('summary_reasoning_effort', 'none')
         self.ai_temperature = ai_config.get('temperature', 0.3)
         self.ai_prescreen_threshold = ai_config.get('prescreen_threshold', 70)  # Pre-filter by criteria score
         self.ai_min_score = ai_config.get('min_score_threshold', 90)
@@ -4302,18 +4307,34 @@ class JobHunterService(BaseService):
                 }
             else:
                 messages.insert(0, {"role": "user", "content": f"<system>\n{system_text}\n</system>"})
+        extra = {}
+        if kwargs.get("reasoning_effort"):
+            extra["extra_body"] = {"reasoning_effort": kwargs["reasoning_effort"]}
         return client.chat.completions.create(
             model=kwargs.get("model", self.ai_model),
             messages=messages,
             max_tokens=kwargs.get("max_tokens", self.ai_max_tokens),
             temperature=kwargs.get("temperature", self.ai_temperature),
+            **extra,
         )
 
     def _extract_text(self, response) -> str:
-        """Extract text from LLM response."""
+        """Extract text from LLM response ('' when the reply has none)."""
         if self.ai_provider == "openai":
-            return response.choices[0].message.content
-        return response.content[0].text
+            return response.choices[0].message.content or ""
+        # every text block; a thinking block (type "thinking") carries no text
+        return "".join(b.text for b in (response.content or [])
+                       if getattr(b, "type", "text") in ("text", None) or not isinstance(getattr(b, "type", None), str)
+                       if isinstance(getattr(b, "text", None), str))
+
+    def _hit_token_limit(self, response) -> bool:
+        """The reply stopped because it reached max_tokens."""
+        try:
+            if self.ai_provider == "openai":
+                return response.choices[0].finish_reason == "length"
+            return getattr(response, "stop_reason", None) == "max_tokens"
+        except (AttributeError, IndexError, TypeError):
+            return False
 
     def _extract_input_tokens(self, response) -> int:
         """Extract input token count from LLM response."""
@@ -4723,18 +4744,35 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
             # Call LLM for the summary
             self.logger.debug(f"jobhunter: Generating hiring summary with {self.ai_summary_model} for {len(approved_jobs)} jobs...")
 
-            response = self._call_llm_with_retry(
-                model=self.ai_summary_model,
-                max_tokens=self.ai_summary_max_tokens,
-                temperature=0.5,  # Slightly higher for more natural writing
-                messages=[{"role": "user", "content": prompt}]
-            )
-
-            summary_text = self._extract_text(response)
-
-            # Calculate cost
+            call = dict(model=self.ai_summary_model, max_tokens=self.ai_summary_max_tokens,
+                        temperature=0.5,  # Slightly higher for more natural writing
+                        messages=[{"role": "user", "content": prompt}])
+            if self.ai_provider == "openai" and self.ai_summary_reasoning_effort:
+                call["reasoning_effort"] = self.ai_summary_reasoning_effort
+            response = self._call_llm_with_retry(**call)
+            summary_text = (self._extract_text(response) or "").strip()
             input_tokens = self._extract_input_tokens(response)
             output_tokens = self._extract_output_tokens(response)
+            if not summary_text and self._hit_token_limit(response):
+                # every token went before any text: once more with twice the room
+                self.logger.warning(
+                    f"jobhunter: hiring summary came back empty at its {call['max_tokens']}-token "
+                    f"limit — retrying once with {call['max_tokens'] * 2}")
+                call["max_tokens"] *= 2
+                response = self._call_llm_with_retry(**call)
+                summary_text = (self._extract_text(response) or "").strip()
+                input_tokens += self._extract_input_tokens(response)
+                output_tokens += self._extract_output_tokens(response)
+            if not summary_text:
+                why = (f"cut off at {call['max_tokens']} tokens before any text"
+                       if self._hit_token_limit(response) else "the model returned no text")
+                self.logger.error(f"jobhunter: hiring summary empty — {why}")
+                self._summary_failure = why
+            elif self._hit_token_limit(response):
+                self.logger.warning(f"jobhunter: hiring summary cut off at {call['max_tokens']} tokens "
+                                    f"— sending what arrived")
+
+            # Calculate cost
             cost = self._calculate_ai_cost(input_tokens, output_tokens, model=self.ai_summary_model)
 
             # Record the summary generation cost
@@ -4749,12 +4787,12 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
                 analysis_type='summary'
             )
 
-            self.logger.info(
-                f"jobhunter: Hiring summary generated: "
-                f"{output_tokens} tokens, cost=${cost:.4f}"
-            )
-
-            return summary_text
+            if summary_text:
+                self.logger.info(
+                    f"jobhunter: Hiring summary generated: "
+                    f"{output_tokens} tokens, cost=${cost:.4f}"
+                )
+            return summary_text or None
 
         except BadRequestError as e:
             if "credit balance" in str(e):
@@ -5173,6 +5211,7 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
                         f"{len(digest_batch)} candidates")
 
                 # Generate professional hiring assistant summary
+                self._summary_failure = None
                 summary = self._generate_hiring_summary(digest_batch)
 
                 if summary:
@@ -5191,10 +5230,14 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
                     self.logger.debug(f"jobhunter: Sent hiring summary for {len(digest_batch)} approved jobs")
                 else:
                     # Summary generation failed - log error but don't spam with individual notifications
-                    self.logger.error("jobhunter: Summary generation failed - no notifications sent")
+                    why = getattr(self, "_summary_failure", None) or "see the log"
+                    self.logger.error(f"jobhunter: Summary generation failed ({why}) - "
+                                      f"sent the failure notice instead")
                     self.notify_user(
                         self.owner_user_id,
-                        f"⚠️ **JobHunter**: Found {len(ai_approved_jobs)} approved jobs but failed to generate summary. Check logs for details.",
+                        f"⚠️ **JobHunter**: Found {len(ai_approved_jobs)} approved jobs but the summary "
+                        f"failed ({why}). `@jobhunter list-ai-approved` lists them; "
+                        f"`@jobhunter top-10` shows the run's best.",
                         content_type="text/markdown"
                     )
             elif not self.ai_enabled and matched_jobs:
@@ -5213,7 +5256,9 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
 
             if self.ai_enabled:
                 self.logger.info(f"jobhunter:    • AI approved (>={self.ai_min_score}): {len(ai_approved_jobs)}")
-                if ai_approved_jobs:
+                if ai_approved_jobs and getattr(self, "_summary_failure", None):
+                    self.logger.info(f"jobhunter:    • Notification: summary failed — failure notice sent")
+                elif ai_approved_jobs:
                     self.logger.info(f"jobhunter:    • Notification: Curated summary sent (1 message)")
                 else:
                     self.logger.info(f"jobhunter:    • Notification: None (no approved jobs)")
