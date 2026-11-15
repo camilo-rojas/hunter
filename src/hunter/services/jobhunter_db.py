@@ -1323,7 +1323,7 @@ class JobHunterDatabaseManager:
                 FROM job_postings p
                 JOIN companies c ON p.company_id = c.id
                 JOIN job_matches m ON p.id = m.job_id
-                WHERE m.ai_score >= ?
+                WHERE m.ai_score >= ? AND p.is_active = 1 AND c.active = 1
                 ORDER BY m.ai_score DESC, p.first_seen_date DESC
                 LIMIT ?
             """, (min_score, limit))

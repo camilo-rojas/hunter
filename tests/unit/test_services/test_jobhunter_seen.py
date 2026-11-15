@@ -92,3 +92,29 @@ def test_an_inactive_company_s_postings_are_not_scored(svc):
     _save(svc, _scrape(svc))
     svc.db_manager.remove_company(svc.company_id)
     assert svc.db_manager.get_recent_jobs(limit=50) == []
+
+
+def test_ai_approved_lists_only_open_postings_of_active_companies(svc):
+    _board(svc, ("VP Sales", "https://x/1"), ("Old role", "https://x/9"))
+    _save(svc, _scrape(svc))
+    db = svc.db_manager
+    rows = _rows(svc)
+    with db._get_connection() as c:
+        for title in ("VP Sales", "Old role"):
+            c.execute("INSERT INTO job_matches (job_id, match_score, notified_date, ai_score) "
+                      "VALUES (?, 80, '', 80)", (rows[title]["id"],))
+        c.execute("UPDATE job_postings SET is_active=0 WHERE title='Old role'")
+    assert [j["title"] for j in db.get_ai_approved_jobs(min_score=60)] == ["VP Sales"]
+    db.remove_company(svc.company_id)
+    assert db.get_ai_approved_jobs(min_score=60) == []
+
+
+def test_approval_uses_the_age_adjusted_score():
+    import inspect
+    src = inspect.getsource(JobHunterService)
+    assert "effective = ai_result['ai_score'] + self._calculate_freshness_adjustment(job)" in src
+    assert "if effective >= self.ai_min_score:" in src
+    s = JobHunterService.__new__(JobHunterService)
+    from datetime import datetime, timedelta, timezone
+    week3 = (datetime.now(timezone.utc) - timedelta(days=22)).isoformat()
+    assert 72 + s._calculate_freshness_adjustment({"first_seen_date": week3}) == 42   # below the 60 bar

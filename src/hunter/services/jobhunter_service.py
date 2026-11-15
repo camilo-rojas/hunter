@@ -5176,8 +5176,13 @@ Be selective and honest — it's fine to pick just one, or to say none clear the
                             ai_recommendation=ai_result['recommendation']
                         )
 
-                        # Only approve jobs with score >= threshold
-                        if ai_result['ai_score'] >= self.ai_min_score:
+                        # Approve on the AGE-ADJUSTED score (the freshness design:
+                        # a role loses priority week by week). Until 2026-11-14
+                        # approval used the raw score, so a weeks-old role kept
+                        # coming back as "approved" every run.
+                        effective = ai_result['ai_score'] + self._calculate_freshness_adjustment(job)
+                        ai_result['effective_score'] = effective
+                        if effective >= self.ai_min_score:
                             match['ai_result'] = ai_result
                             ai_approved_jobs.append(match)
 
